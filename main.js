@@ -3,40 +3,56 @@ const fs = require("fs");
 const { fileURLToPath } = require("url");
 const { app, BrowserWindow, globalShortcut, session, ipcMain, nativeImage, Menu } = require("electron");
 
-// Set early stealth identity for macOS Dock and process before ready or locks
-app.name = "Settings";
-if (typeof app.setName === "function") {
-  app.setName("Settings");
+// Ensure process runs with OpenCluely root as working directory
+try {
+  process.chdir(__dirname);
+} catch (_) {}
+
+// Augment macOS PATH so Homebrew and local tools are available when launched from Dock/Finder
+if (process.platform === "darwin") {
+  const brewPaths = ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/sbin"];
+  const currentPath = process.env.PATH || "";
+  process.env.PATH = `${brewPaths.join(":")}:${currentPath}`;
 }
-process.title = "Settings";
+
+// Set early stealth identity for macOS Dock and process before ready or locks
+app.name = "Setting";
+if (typeof app.setName === "function") {
+  app.setName("Setting");
+}
+process.title = "Setting";
 
 // Prevent SSL certificate verification failures in Node/Electron network requests
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 // ── Resolve a stable .env location ──
-// In packaged builds process.cwd() is unstable and frequently read-only
-// (NSIS install dir, AppImage mount, .app bundle), so the canonical config
-// lives in Electron's userData directory. We still prefer an existing
-// project-local .env in development (npm start) so the dev workflow is
-// unchanged. Both onboarding (FirstRunManager) and persistEnvUpdates() write
-// to this same path so settings survive restarts on every platform.
+// Ensure the active project .env is always synchronized so Gemini API key and settings
+// are immediately ready on launch without manual setup.
 function resolveEnvPath() {
   try {
+    const projectEnv = path.join("/Users/jenilrevaliya/Desktop/Projects/cluely/OpenCluely", ".env");
     const userDataEnv = path.join(app.getPath("userData"), ".env");
-    const projectEnv = path.join(process.cwd(), ".env");
-    // Prefer a project .env only when it already exists and userData has none
-    // (i.e. a developer running from the repo). Otherwise use userData.
-    if (!fs.existsSync(userDataEnv) && fs.existsSync(projectEnv)) {
+
+    if (fs.existsSync(projectEnv)) {
+      try {
+        const projectContent = fs.readFileSync(projectEnv, "utf8");
+        if (projectContent && projectContent.includes("GEMINI_API_KEY")) {
+          // Keep userDataEnv in sync with the project's current active API keys
+          fs.writeFileSync(userDataEnv, projectContent, "utf8");
+        }
+      } catch (_) {}
       return projectEnv;
     }
-    return userDataEnv;
+
+    if (fs.existsSync(userDataEnv)) {
+      return userDataEnv;
+    }
+    return projectEnv;
   } catch (_) {
-    // On packaged macOS builds, process.cwd() may be inside a read-only .app
-    // bundle. Fall back to userData so .env writes never fail.
     try {
       return path.join(app.getPath("userData"), ".env");
     } catch (e2) {
-      return path.join(process.cwd(), ".env");
+      return path.join(__dirname, ".env");
     }
   }
 }
@@ -190,10 +206,10 @@ class ApplicationController {
 
     // Set default stealth app name early
     if (app && typeof app.setName === 'function') {
-      app.setName("Settings");
-      app.name = "Settings";
+      app.setName("Setting");
+      app.name = "Setting";
     }
-    process.title = "Settings";
+    process.title = "Setting";
 
     if (
       process.platform === "darwin" &&
@@ -268,9 +284,9 @@ class ApplicationController {
     this.starting = true;
 
     // Force stealth mode IMMEDIATELY when app is ready
-    app.setName("Settings");
-    app.name = "Settings";
-    process.title = "Settings";
+    app.setName("Setting");
+    app.name = "Setting";
+    process.title = "Setting";
 
     // macOS: Configure Dock icon to genuine macOS System Settings icon and ensure stealth title
     if (process.platform === 'darwin' && app.dock) {
@@ -291,7 +307,7 @@ class ApplicationController {
         // Provide custom Dock context menu with instant Quit option
         const dockMenu = Menu.buildFromTemplate([
           {
-            label: 'Quit',
+            label: 'Quit Setting',
             click: () => {
               logger.info('Quit triggered from Dock context menu');
               this.quitApp();
@@ -468,6 +484,43 @@ class ApplicationController {
         callback(granted);
       }
     );
+
+    // macOS: Explicitly trigger OS-level Screen Recording and Microphone requests
+    // so Setting appears immediately in System Settings -> Privacy & Security
+    if (process.platform === "darwin") {
+      try {
+        const helperPath = path.join(process.resourcesPath, "../MacOS/request_permissions");
+        const fallbackHelperPath = path.join(__dirname, "scripts/request_permissions");
+        const finalHelper = fs.existsSync(helperPath)
+          ? helperPath
+          : fs.existsSync(fallbackHelperPath)
+          ? fallbackHelperPath
+          : null;
+        if (finalHelper) {
+          require("child_process").execFile(finalHelper, [], (err, stdout) => {
+            if (err) {
+              logger.warn("macOS permission helper warning:", { error: err.message });
+            } else {
+              logger.info("macOS permission helper output:", stdout ? stdout.trim() : "");
+            }
+          });
+        }
+      } catch (e) {
+        logger.warn("Failed to execute native permission helper:", { error: e.message });
+      }
+
+      try {
+        const { systemPreferences, desktopCapturer } = require("electron");
+        if (systemPreferences && typeof systemPreferences.askForMediaAccess === "function") {
+          systemPreferences.askForMediaAccess("microphone").then((granted) => {
+            logger.info("systemPreferences microphone access:", granted);
+          }).catch(() => {});
+        }
+        if (desktopCapturer && typeof desktopCapturer.getSources === "function") {
+          desktopCapturer.getSources({ types: ["screen"] }).catch(() => {});
+        }
+      } catch (_) {}
+    }
   }
 
   setupGlobalShortcuts() {

@@ -1,8 +1,8 @@
 {
-  "name": "settings",
-  "productName": "Settings",
+  "name": "setting",
+  "productName": "Setting",
   "version": "1.0.0",
-  "description": "Settings",
+  "description": "Setting",
   "main": "main.js",
   "scripts": {
     "start": "env -u ELECTRON_RUN_AS_NODE electron .",

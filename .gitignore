@@ -10,4 +10,5 @@ bin/
 *.log
 scripts/__pycache__/
 scripts/caps_led
-
+scripts/request_permissions
+.opencluely-firstrun-completed

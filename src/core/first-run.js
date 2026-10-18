@@ -28,10 +28,13 @@ class FirstRunManager {
    * sentinel file, or .env exists but has no Gemini key.
    */
   needsOnboarding() {
-    if (!fs.existsSync(this.sentinelPath)) return true;
-    if (!fs.existsSync(this.envPath)) return true;
     const content = this._readEnv();
     const gemini = (content.GEMINI_API_KEY || '').trim();
+    if (gemini && gemini !== 'your_gemini_api_key_here' && gemini.length > 10) {
+      return false;
+    }
+    if (!fs.existsSync(this.sentinelPath)) return true;
+    if (!fs.existsSync(this.envPath)) return true;
     return !gemini || gemini === 'your_gemini_api_key_here';
   }
 
