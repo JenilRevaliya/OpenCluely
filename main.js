@@ -480,6 +480,10 @@ class ApplicationController {
       "CommandOrControl+,": () => windowManager.showSettings(),
       "Alt+A": () => windowManager.toggleInteraction(),
       "Alt+R": () => this.toggleSpeechRecognition(),
+      // Rubic Stealth MCQ trigger (Alt+S or Cmd+Shift+R or Cmd+Alt+R)
+      "CommandOrControl+Shift+R": () => this.triggerRubicMCQ(),
+      "Alt+S": () => this.triggerRubicMCQ(),
+      "CommandOrControl+Alt+R": () => this.triggerRubicMCQ(),
       // Smart Auto-Type clipboard content at 90-120 WPM (Alt+V or Cmd+Alt+V)
       "Alt+V": () => this.autoTypeClipboard(),
       "CommandOrControl+Alt+V": () => this.autoTypeClipboard(),
@@ -1237,6 +1241,7 @@ class ApplicationController {
   getRubicState() {
     return {
       rubicMode: this.rubicMode,
+      enabled: this.rubicMode,
       singleSelect: this.rubicSingleSelect,
       capsLockLED: this.rubicCapsLockLED,
       menuBarSymbol: this.rubicMenuBarSymbol,
@@ -1283,6 +1288,7 @@ class ApplicationController {
   async triggerRubicMCQ() {
     if (!this.isReady) {
       logger.warn("Rubic MCQ triggered before application ready");
+      windowManager.broadcastToAllWindows("rubic-status", { state: "idle" });
       return { success: false, error: 'App not ready' };
     }
 

@@ -8,7 +8,7 @@ const logger = {
 
 class MainWindowUI {
     constructor() {
-        this.isInteractive = false;
+        this.isInteractive = true;
         this.isHidden = false;
         this.currentSkill = 'dsa'; // Default, will be updated from settings
         this.isMcqMode = false;
@@ -134,9 +134,9 @@ class MainWindowUI {
                 }
             }
         } catch (error) {
-            // If we can't get the state, assume non-interactive (safer default)
-            this.isInteractive = false;
-            logger.warn('Failed to load current interaction state, defaulting to non-interactive', {
+            // Default to interactive mode so UI buttons are always responsive
+            this.isInteractive = true;
+            logger.warn('Failed to load current interaction state, defaulting to interactive', {
                 component: 'MainWindowUI',
                 error: error.message
             });
@@ -500,7 +500,6 @@ class MainWindowUI {
         };
 
         const toggleExpandAction = () => {
-            if (!this.isInteractive) return;
             this.isBarExpanded = !this.isBarExpanded;
             localStorage.setItem('barExpanded', this.isBarExpanded ? 'true' : 'false');
             this.applyBarMode();
@@ -531,7 +530,7 @@ class MainWindowUI {
 
         // 1. Screenshot click & hover-dwell handler
         const triggerScreenshotAction = () => {
-            if (this.isInteractive && window.electronAPI && window.electronAPI.takeScreenshot) {
+            if (window.electronAPI && window.electronAPI.takeScreenshot) {
                 window.electronAPI.takeScreenshot();
             }
         };
@@ -542,7 +541,7 @@ class MainWindowUI {
 
         if (this.targetModeBtn) {
             this.targetModeBtn.addEventListener('click', () => {
-                if (this.isInteractive && window.electronAPI && window.electronAPI.showTargetBox) {
+                if (window.electronAPI && window.electronAPI.showTargetBox) {
                     window.electronAPI.showTargetBox();
                 }
             });
@@ -550,7 +549,6 @@ class MainWindowUI {
 
         if (this.clipboardHistoryBtn) {
             this.clipboardHistoryBtn.addEventListener('click', (e) => {
-                if (!this.isInteractive) return;
                 e.stopPropagation();
                 this.toggleClipboardPopover();
             });
@@ -566,7 +564,6 @@ class MainWindowUI {
 
         // 2. MCQ toggle click & hover-dwell handler
         const toggleMcqAction = async () => {
-            if (!this.isInteractive) return;
             if (window.electronAPI && window.electronAPI.toggleMcqMode) {
                 try {
                     const res = await window.electronAPI.toggleMcqMode();
@@ -586,11 +583,11 @@ class MainWindowUI {
 
         // 3. Rubic Universal Button (Instant MCQ scan: Click OR Hover 3s)
         const triggerRubicAction = async () => {
-            if (!this.isInteractive) return;
             if (window.electronAPI && window.electronAPI.triggerRubicMCQ) {
                 try {
                     if (this.rubicButton) {
                         this.rubicButton.classList.add('rubic-processing');
+                        this.rubicButton.classList.remove('rubic-active');
                     }
                     if (this.rubicButtonLabel) {
                         this.rubicButtonLabel.textContent = 'Thinking...';
@@ -617,7 +614,6 @@ class MainWindowUI {
         // 4. Rubic sub-toggle: Single/Multi select (1 / M)
         if (this.rubicToggleSingle) {
             const toggleSingleAction = async () => {
-                if (!this.isInteractive) return;
                 this.rubicSingleSelect = !this.rubicSingleSelect;
                 if (window.electronAPI && window.electronAPI.setRubicOption) {
                     await window.electronAPI.setRubicOption('singleSelect', this.rubicSingleSelect);
@@ -634,7 +630,6 @@ class MainWindowUI {
         // 5. Rubic sub-toggle: Caps Lock LED
         if (this.rubicToggleLED) {
             const toggleLEDAction = async () => {
-                if (!this.isInteractive) return;
                 this.rubicCapsLockLED = !this.rubicCapsLockLED;
                 if (window.electronAPI && window.electronAPI.setRubicOption) {
                     await window.electronAPI.setRubicOption('capsLockLED', this.rubicCapsLockLED);
@@ -650,7 +645,6 @@ class MainWindowUI {
         // 6. Rubic sub-toggle: Menu Bar Symbol
         if (this.rubicToggleMenuBar) {
             const toggleMenuBarAction = async () => {
-                if (!this.isInteractive) return;
                 this.rubicMenuBarSymbol = !this.rubicMenuBarSymbol;
                 if (window.electronAPI && window.electronAPI.setRubicOption) {
                     await window.electronAPI.setRubicOption('menuBarSymbol', this.rubicMenuBarSymbol);
@@ -665,7 +659,6 @@ class MainWindowUI {
 
         // 7. Auto-Hide toggle click & hover-dwell handler
         const toggleAutoHideAction = async () => {
-            if (!this.isInteractive) return;
             if (window.electronAPI && window.electronAPI.toggleAutoHideMode) {
                 try {
                     const res = await window.electronAPI.toggleAutoHideMode();
@@ -685,7 +678,6 @@ class MainWindowUI {
 
         // 8. Auto-type clipboard click & hover-dwell handler
         const triggerAutoTypeAction = async () => {
-            if (!this.isInteractive) return;
             if (window.electronAPI && window.electronAPI.typeClipboard) {
                 try {
                     await window.electronAPI.typeClipboard();
@@ -853,7 +845,6 @@ class MainWindowUI {
 
         // Skill indicator click handler toggles DSA skill
         this.skillIndicator.addEventListener('click', () => {
-            if (!this.isInteractive) return;
             const newSkill = 'dsa';
             if (window.electronAPI && window.electronAPI.updateActiveSkill) {
                 window.electronAPI.updateActiveSkill(newSkill).then(() => {
@@ -867,15 +858,13 @@ class MainWindowUI {
         // Check for required elements (settingsIndicator is optional)
         if (this.settingsIndicator) {
             this.settingsIndicator.addEventListener('click', () => {
-                if (this.isInteractive) {
-                    this.showSettingsMenu();
-                }
+                this.showSettingsMenu();
             });
         }
 
         // 9. Microphone click & hover-dwell handler
         const toggleMicAction = async () => {
-            if (this.isInteractive && this.speechAvailable) {
+            if (this.speechAvailable) {
                 try {
                     if (this.isRecording) {
                         await window.electronAPI.stopSpeechRecognition();
@@ -890,7 +879,7 @@ class MainWindowUI {
                     this.isRecording = false;
                     this.updateMicButtonState();
                 }
-            } else if (this.isInteractive && !this.speechAvailable) {
+            } else {
                 logger.warn('Mic clicked but speech recognition is not available', {
                     component: 'MainWindowUI'
                 });
@@ -1112,22 +1101,27 @@ class MainWindowUI {
             
             // Global keyboard shortcuts
             document.addEventListener('keydown', (e) => {
-                if (e.altKey && (e.key === 'r' || e.key === '®') && this.isInteractive) {
+                // Rubic MCQ shortcut (Alt+S or Alt+R if not recording)
+                if (e.altKey && (e.key === 's' || e.key === 'ß')) {
                     e.preventDefault();
-                    if (!this.speechAvailable) return; // guard when unavailable
+                    triggerRubicAction();
+                }
+                if (e.altKey && (e.key === 'r' || e.key === '®')) {
+                    e.preventDefault();
+                    if (!this.speechAvailable) return;
                     if (this.isRecording) {
                         window.electronAPI.stopSpeechRecognition();
                     } else {
                         window.electronAPI.startSpeechRecognition();
                     }
                 }
-                if (e.altKey && (e.key === 'v' || e.key === '√') && this.isInteractive) {
+                if (e.altKey && (e.key === 'v' || e.key === '√')) {
                     e.preventDefault();
                     if (window.electronAPI && window.electronAPI.typeClipboard) {
                         window.electronAPI.typeClipboard();
                     }
                 }
-                if (e.altKey && (e.key === 'm' || e.key === 'µ') && this.isInteractive) {
+                if (e.altKey && (e.key === 'm' || e.key === 'µ')) {
                     e.preventDefault();
                     if (window.electronAPI && window.electronAPI.toggleMcqMode) {
                         window.electronAPI.toggleMcqMode();
@@ -2045,7 +2039,8 @@ class MainWindowUI {
     }
 
     applyRubicState(state) {
-        this.rubicMode = !!state.rubicMode;
+        if (!state) return;
+        this.rubicMode = state.rubicMode !== undefined ? !!state.rubicMode : !!state.enabled;
         this.rubicSingleSelect = state.singleSelect !== false;
         this.rubicCapsLockLED = !!state.capsLockLED;
         this.rubicMenuBarSymbol = !!state.menuBarSymbol;
@@ -2060,10 +2055,13 @@ class MainWindowUI {
     updateRubicUI() {
         // Update Rubic button state
         if (this.rubicButton) {
-            if (this.rubicMode) {
-                this.rubicButton.classList.add('rubic-active');
-            } else {
-                this.rubicButton.classList.remove('rubic-active');
+            // Never overwrite or strip processing/thinking state while in-flight
+            if (!this.rubicButton.classList.contains('rubic-processing')) {
+                if (this.rubicMode) {
+                    this.rubicButton.classList.add('rubic-active');
+                } else {
+                    this.rubicButton.classList.remove('rubic-active');
+                }
             }
         }
 
@@ -2148,6 +2146,16 @@ class MainWindowUI {
             this.resizeWindowToContent();
         } else {
             logger.warn('Rubic MCQ failed or returned no answer', { error: data.error });
+            if (this.rubicAnswerVal && this.rubicAnswerBox) {
+                this.rubicAnswerVal.textContent = '!';
+                this.rubicAnswerBox.style.display = 'inline-flex';
+                setTimeout(() => {
+                    if (this.rubicAnswerVal && this.rubicAnswerVal.textContent === '!') {
+                        const savedAnswer = localStorage.getItem('rubicLastAnswer');
+                        this.rubicAnswerVal.textContent = savedAnswer || '-';
+                    }
+                }, 2000);
+            }
         }
     }
 }
