@@ -35,6 +35,7 @@ class MainWindowUI {
         this.rubicAnswerBadge = null;
         this._aiStatusInterval = null;
         this._rubicAnswerTimeout = null;
+        this._rubicProcessing = false;
         // Renderer-side audio capture state (used for Whisper on Windows)
         this._audioContext = null;
         this._mediaStream = null;
@@ -583,6 +584,8 @@ class MainWindowUI {
 
         // 3. Rubic Universal Button (Instant MCQ scan: Click OR Hover 3s)
         const triggerRubicAction = async () => {
+            if (this._rubicProcessing) return;
+            this._rubicProcessing = true;
             if (window.electronAPI && window.electronAPI.triggerRubicMCQ) {
                 try {
                     if (this.rubicButton) {
@@ -601,7 +604,11 @@ class MainWindowUI {
                     if (this.rubicButtonLabel) {
                         this.rubicButtonLabel.textContent = 'Rubic';
                     }
+                } finally {
+                    this._rubicProcessing = false;
                 }
+            } else {
+                this._rubicProcessing = false;
             }
         };
         if (this.rubicButton) {
@@ -788,48 +795,7 @@ class MainWindowUI {
                 }
             });
 
-            // Effortless Quitting: Double-click anywhere on the bar to quit immediately
-            mainBarTab.addEventListener('dblclick', (e) => {
-                if (e.target && (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT' || e.target.closest('select') || e.target.closest('input'))) {
-                    return;
-                }
-                e.preventDefault();
-                e.stopPropagation();
-                if (window.electronAPI && window.electronAPI.quitApp) {
-                    window.electronAPI.quitApp();
-                } else if (window.electronAPI && window.electronAPI.quit) {
-                    window.electronAPI.quit();
-                }
-            });
         }
-
-        // Status dot double-click also quits instantly
-        if (this.aiStatusDot) {
-            this.aiStatusDot.addEventListener('dblclick', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (window.electronAPI && window.electronAPI.quitApp) {
-                    window.electronAPI.quitApp();
-                } else if (window.electronAPI && window.electronAPI.quit) {
-                    window.electronAPI.quit();
-                }
-            });
-        }
-
-        // Effortless Quitting: Keyboard shortcuts inside window (Escape, Cmd+Q, Ctrl+Q, Alt+Q)
-        window.addEventListener('keydown', (e) => {
-            const isQ = e.key && e.key.toLowerCase() === 'q';
-            const isQuitKey = e.key === 'Escape' || ((e.metaKey || e.ctrlKey || e.altKey) && isQ);
-            if (isQuitKey) {
-                e.preventDefault();
-                e.stopPropagation();
-                if (window.electronAPI && window.electronAPI.quitApp) {
-                    window.electronAPI.quitApp();
-                } else if (window.electronAPI && window.electronAPI.quit) {
-                    window.electronAPI.quit();
-                }
-            }
-        });
 
         // Quit Cluely button handler in shortcuts popover
         const quitAppBtn = document.getElementById('quitAppBtn');
@@ -1063,6 +1029,7 @@ class MainWindowUI {
                             this.rubicButtonLabel.textContent = 'Thinking...';
                         }
                     } else if (data.state === 'idle') {
+                        this._rubicProcessing = false;
                         if (this.rubicButton) {
                             this.rubicButton.classList.remove('rubic-processing');
                         }
@@ -2109,6 +2076,7 @@ class MainWindowUI {
     }
 
     handleRubicAnswer(data) {
+        this._rubicProcessing = false;
         if (!data) return;
 
         // Reset processing state on the Rubic button

@@ -1292,6 +1292,12 @@ class ApplicationController {
       return { success: false, error: 'App not ready' };
     }
 
+    if (this._rubicMCQInProgress) {
+      logger.info("Rubic MCQ trigger already in progress, ignoring duplicate trigger");
+      return { inProgress: true };
+    }
+    this._rubicMCQInProgress = true;
+
     const startTime = Date.now();
     logger.info("Rubic MCQ triggered");
 
@@ -1412,7 +1418,7 @@ class ApplicationController {
 
       return { success: true, answer, processingTime: Date.now() - startTime };
     } catch (error) {
-      logger.error("Rubic MCQ failed", { error: error.message });
+      logger.error(`Rubic MCQ failed: ${error.message || error}`, { stack: error.stack });
       this.rubicMode = false;
       windowManager.broadcastToAllWindows("rubic-mode-changed", this.getRubicState());
       windowManager.broadcastToAllWindows("rubic-status", { state: "idle" });
@@ -1421,6 +1427,8 @@ class ApplicationController {
         error: error.message
       });
       return { success: false, error: error.message };
+    } finally {
+      this._rubicMCQInProgress = false;
     }
   }
 

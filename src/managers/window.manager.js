@@ -955,23 +955,10 @@ class WindowManager {
   }
 
   setupScreenCaptureAvailabilityWatcher() {
-    // Avoid screencast portal errors on Linux/Wayland by disabling periodic detection
-    if (process.platform === 'linux') {
-      logger.info('Skipping screen capture availability watcher on Linux to avoid portal screencast errors');
-      return;
-    }
-
-    if (this.screenCaptureAvailabilityWatcher) {
-      clearInterval(this.screenCaptureAvailabilityWatcher);
-    }
-
-    // This is only a capture availability probe. desktopCapturer.getSources()
-    // cannot tell whether another app is currently sharing the screen.
-    this.screenCaptureAvailabilityWatcher = setInterval(async () => {
-      await this.checkScreenCaptureAvailability();
-    }, 5000); // Check every 5 seconds instead of 1
-
-    logger.info('Screen capture availability watcher initialized');
+    // Only check once at startup to verify screen capture enumeration works,
+    // avoiding continuous 5-second polling that races with user screen captures.
+    this.checkScreenCaptureAvailability().catch(() => {});
+    logger.info('Screen capture availability initial check complete');
   }
 
   async checkScreenCaptureAvailability() {
