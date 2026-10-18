@@ -1358,32 +1358,49 @@ class ApplicationController {
         return { success: false, error: 'Failed to capture screenshot' };
       }
 
-      // 2. Build the MCQ-specific prompt
+      // 2. Build the MCQ-specific prompt with robust filtering of headers, rules, and titles
       const selectMode = this.rubicSingleSelect ? 'SINGLE' : 'MULTI';
       const rubicPrompt = [
-        'You are an MCQ answer extraction engine. Analyze the screen image.',
-        'The FIRST line of text is the QUESTION.',
-        'All subsequent lines/blocks of text below it are the OPTIONS.',
+        'You are an expert assessment solver and MCQ answer extraction engine.',
+        'Carefully examine the screen image to locate and solve the active test question.',
         '',
-        'IMPORTANT: Even if the options are NOT labeled,',
-        'map them top-to-bottom as A, B, C, D, E, F, G, H (or further).',
+        'CRITICAL FILTERING & EXTRACTION RULES:',
+        '1. IGNORE all extraneous surrounding text: test title, exam rules/instructions, headers, navigation bars, timers, question number palette (1,2,3...), candidate info, watermarks, and footer action buttons (e.g. Previous, Next, Clear, Submit).',
+        '2. LOCATE the ACTUAL question body text, including any associated code snippet, scenario, passage, equation, or diagram.',
+        '3. IDENTIFY all selectable choice options (typically marked with radio buttons, checkboxes, letters A/B/C/D/E/F/G, or bulleted/stacked choice items).',
+        '4. If options are explicitly labeled (A, B, C, D, E, F...), use those labels. If options are NOT labeled, map them in strict reading order (top-to-bottom, left-to-right) as:',
+        '   1st option = A',
+        '   2nd option = B',
+        '   3rd option = C',
+        '   4th option = D',
+        '   5th option = E',
+        '   6th option = F',
+        '   7th option = G',
+        '   (and so on).',
+        '5. ACCURATELY SOLVE the question based on the options presented.',
         '',
         `SELECT MODE: ${selectMode}`,
         selectMode === 'SINGLE'
           ? 'Return EXACTLY ONE correct answer letter.'
-          : 'Return ALL correct answer letters, comma-separated.',
+          : 'Return ALL correct answer letters, comma-separated (e.g. "A,C" or "B,D").',
         '',
-        'RESPONSE FORMAT: Output ONLY the letter(s), nothing else.',
-        'Examples: "B" or "A,C" or "E" or "F,G" (for multi-select).',
-        'Do NOT include explanations, reasoning, or any other text.',
+        'RESPONSE FORMAT: Output ONLY the uppercase letter(s), nothing else.',
+        'Examples: "A" or "B" or "C" or "D" or "E" or "A,C".',
+        'Do NOT write any explanations, reasoning, punctuation, quotes, or preamble. Just the letter(s).',
       ].join('\n');
 
-      // 3. Send to AI (instant sub-2s response)
-      const result = await llmService.processImageDirect(
-        capture.imageBuffer,
-        capture.mimeType || 'image/png',
-        rubicPrompt
+      // 3. Send to AI with 10s strict timeout
+      const requestTimeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Rubic request timed out after 10s')), 10000)
       );
+      const result = await Promise.race([
+        llmService.processImageDirect(
+          capture.imageBuffer,
+          capture.mimeType || 'image/png',
+          rubicPrompt
+        ),
+        requestTimeout
+      ]);
 
       // 4. Parse the answer — extract clean option letter(s)
       const rawText = (result.response || '').trim();

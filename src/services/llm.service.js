@@ -75,8 +75,7 @@ class LLMService {
       temperature: 0.7,
       topK: 40,
       topP: 0.95,
-      maxOutputTokens: 4096,
-      thinkingConfig: { thinkingBudget: 0 }
+      maxOutputTokens: 4096
     };
 
     const merged = { ...fallback, ...defaults, ...overrides };
@@ -1695,13 +1694,8 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
             break;
           }
 
-          const isModelUnavailable = error.message.includes('503') ||
-            error.message.includes('UNAVAILABLE') ||
-            error.message.includes('high demand');
-
-          if (!isModelUnavailable && !isQuotaOrAuth && modelName === primaryModel) {
-            break;
-          }
+          // On any model error, continue to try the next fallback model
+          continue;
         }
       }
     }

@@ -586,6 +586,20 @@ class MainWindowUI {
         const triggerRubicAction = async () => {
             if (this._rubicProcessing) return;
             this._rubicProcessing = true;
+
+            // Safety timeout: automatically reset thinking state after 12s if not already resolved
+            if (this._rubicWatchdog) clearTimeout(this._rubicWatchdog);
+            this._rubicWatchdog = setTimeout(() => {
+                this._rubicProcessing = false;
+                if (this.rubicButton) {
+                    this.rubicButton.classList.remove('rubic-processing');
+                    this.rubicButton.classList.remove('rubic-active');
+                }
+                if (this.rubicButtonLabel) {
+                    this.rubicButtonLabel.textContent = 'Rubic';
+                }
+            }, 12000);
+
             if (window.electronAPI && window.electronAPI.triggerRubicMCQ) {
                 try {
                     if (this.rubicButton) {
@@ -606,9 +620,17 @@ class MainWindowUI {
                     }
                 } finally {
                     this._rubicProcessing = false;
+                    if (this._rubicWatchdog) {
+                        clearTimeout(this._rubicWatchdog);
+                        this._rubicWatchdog = null;
+                    }
                 }
             } else {
                 this._rubicProcessing = false;
+                if (this._rubicWatchdog) {
+                    clearTimeout(this._rubicWatchdog);
+                    this._rubicWatchdog = null;
+                }
             }
         };
         if (this.rubicButton) {
@@ -2077,6 +2099,10 @@ class MainWindowUI {
 
     handleRubicAnswer(data) {
         this._rubicProcessing = false;
+        if (this._rubicWatchdog) {
+            clearTimeout(this._rubicWatchdog);
+            this._rubicWatchdog = null;
+        }
         if (!data) return;
 
         // Reset processing state on the Rubic button
