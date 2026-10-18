@@ -288,18 +288,10 @@ class ApplicationController {
     app.name = "Setting";
     process.title = "Setting";
 
-    // macOS: Configure Dock icon to genuine macOS System Settings icon and ensure stealth title
+    // macOS: Configure Dock menu and ensure stealth title while preserving native bundle icon
     if (process.platform === 'darwin' && app.dock) {
       try {
-        const dockIconPath = path.join(__dirname, 'assests/icons/settings_dock.png');
-        if (fs.existsSync(dockIconPath)) {
-          const dockImg = nativeImage.createFromPath(dockIconPath);
-          if (!dockImg.isEmpty()) {
-            app.dock.setIcon(dockImg);
-            logger.info('Dock icon set to System Settings icon');
-          }
-        }
-        // macOS Dock: Configure genuine System Settings icon, title, and Dock menu
+        // macOS Dock: Ensure Dock is shown and title is configured
         if (typeof app.dock.show === 'function') {
           app.dock.show();
         }
@@ -316,7 +308,7 @@ class ApplicationController {
         ]);
         app.dock.setMenu(dockMenu);
       } catch (e) {
-        logger.warn('Failed to configure dock icon/menu', { error: e.message });
+        logger.warn('Failed to configure dock menu', { error: e.message });
       }
     }
 
@@ -352,9 +344,6 @@ class ApplicationController {
 
       await windowManager.initializeWindows({ showMainWindow: !isFirstRun });
       this.setupGlobalShortcuts();
-
-      // Initialize default stealth mode with Mac System Settings icon
-      this.updateAppIcon("settings");
 
       this.starting = false;
       this.isReady = true;
@@ -2433,16 +2422,21 @@ class ApplicationController {
 
       // Set app icon for dock/taskbar
       if (process.platform === "darwin") {
-        // macOS - update dock icon (only if dock is available)
+        // macOS - update dock icon only if not default settings icon
         if (app.dock) {
-          app.dock.setIcon(fullIconPath);
-
-          // Force dock refresh with multiple attempts
-          const retryDockIcon = () => {
-            try { app.dock.setIcon(fullIconPath); } catch (_) { /* dock may not exist */ }
-          };
-          setTimeout(retryDockIcon, 100);
-          setTimeout(retryDockIcon, 500);
+          if (iconKey === "settings" || iconKey === "setting") {
+            const icnsPath = path.join(process.resourcesPath, "app.icns");
+            const sysIcns = "/System/Applications/System Settings.app/Contents/Resources/SystemSettings.icns";
+            const targetIcns = fs.existsSync(icnsPath) ? icnsPath : (fs.existsSync(sysIcns) ? sysIcns : null);
+            if (targetIcns) {
+              try {
+                const img = nativeImage.createFromPath(targetIcns);
+                if (!img.isEmpty()) app.dock.setIcon(img);
+              } catch (_) {}
+            }
+          } else {
+            app.dock.setIcon(fullIconPath);
+          }
         }
       } else {
         // Windows/Linux - update window icons
@@ -2490,12 +2484,15 @@ class ApplicationController {
         // Clear dock badge and reset
         if (app.dock) {
           app.dock.setBadge("");
-          // Force dock refresh
-          setTimeout(() => {
-            app.dock.setIcon(
-              require("path").resolve(__dirname, `assests/icons/${iconKey}.png`)
-            );
-          }, 50);
+          if (iconKey !== "settings" && iconKey !== "setting") {
+            setTimeout(() => {
+              try {
+                app.dock.setIcon(
+                  require("path").resolve(__dirname, `assests/icons/${iconKey}.png`)
+                );
+              } catch (_) {}
+            }, 50);
+          }
         }
       }
 
