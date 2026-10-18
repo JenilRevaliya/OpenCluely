@@ -1,7 +1,14 @@
 const path = require("path");
 const fs = require("fs");
 const { fileURLToPath } = require("url");
-const { app, BrowserWindow, globalShortcut, session, ipcMain, nativeImage } = require("electron");
+const { app, BrowserWindow, globalShortcut, session, ipcMain, nativeImage, Menu } = require("electron");
+
+// Set early stealth identity for macOS Dock and process before ready or locks
+app.name = "Settings";
+if (typeof app.setName === "function") {
+  app.setName("Settings");
+}
+process.title = "Settings";
 
 // Prevent SSL certificate verification failures in Node/Electron network requests
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
@@ -201,6 +208,10 @@ class ApplicationController {
     app.whenReady().then(() => this.onAppReady());
     app.on("window-all-closed", () => this.onWindowAllClosed());
     app.on("activate", () => this.onActivate());
+    app.on("before-quit", () => {
+      logger.info("before-quit event received from Dock or system");
+      this.quitApp();
+    });
     app.on("will-quit", () => this.onWillQuit());
 
     // Clean exit handlers for terminal interrupts (Ctrl+C / SIGINT / SIGTERM)
@@ -272,11 +283,24 @@ class ApplicationController {
             logger.info('Dock icon set to System Settings icon');
           }
         }
+        // macOS Dock: Configure genuine System Settings icon, title, and Dock menu
         if (typeof app.dock.show === 'function') {
           app.dock.show();
         }
+
+        // Provide custom Dock context menu with instant Quit option
+        const dockMenu = Menu.buildFromTemplate([
+          {
+            label: 'Quit',
+            click: () => {
+              logger.info('Quit triggered from Dock context menu');
+              this.quitApp();
+            }
+          }
+        ]);
+        app.dock.setMenu(dockMenu);
       } catch (e) {
-        logger.warn('Failed to configure dock icon', { error: e.message });
+        logger.warn('Failed to configure dock icon/menu', { error: e.message });
       }
     }
 
@@ -2013,7 +2037,7 @@ class ApplicationController {
   quitApp() {
     if (this._isQuitting) return;
     this._isQuitting = true;
-    logger.info("Application quit initiated via shortcut or signal");
+    logger.info("Application quit initiated via Dock, shortcut, or signal");
     try {
       globalShortcut.unregisterAll();
       windowManager.destroyAllWindows();
@@ -2025,20 +2049,11 @@ class ApplicationController {
     app.quit();
     setTimeout(() => {
       process.exit(0);
-    }, 300);
+    }, 100);
   }
 
   onWillQuit() {
-    globalShortcut.unregisterAll();
-    speechService.shutdown();
-    windowManager.destroyAllWindows();
-    clipboardTrackerManager.stop();
-
-    const sessionStats = sessionManager.getMemoryUsage();
-    logger.info("Application shutting down", {
-      sessionEvents: sessionStats.eventCount,
-      sessionSize: sessionStats.approximateSize,
-    });
+    this.quitApp();
   }
 
   getWhisperInstaller() {

@@ -407,6 +407,7 @@ class WindowManager {
         thickFrame: false,
         focusable: true,
         ...(process.platform === 'darwin' && {
+          type: 'panel',
           titleBarStyle: 'hiddenInset',
           trafficLightPosition: { x: -100, y: -100 },
           acceptFirstMouse: true,
@@ -429,6 +430,7 @@ class WindowManager {
         hasShadow: false,
         thickFrame: false,
         ...(process.platform === 'darwin' && {
+          type: 'panel',
           titleBarStyle: 'hiddenInset',
           trafficLightPosition: { x: -100, y: -100 },
           acceptFirstMouse: true
@@ -452,6 +454,7 @@ class WindowManager {
         closable: false,
         hasShadow: true,
         ...(process.platform === 'darwin' && {
+          type: 'panel',
           titleBarStyle: 'hiddenInset',
           trafficLightPosition: { x: -100, y: -100 },
           acceptFirstMouse: true
@@ -858,21 +861,15 @@ class WindowManager {
     if (!win || win.isDestroyed()) return;
 
     if (process.platform === 'darwin') {
-      // macOS: prevent space switching and keep visibility stable across all desktops/fullscreens
-      win.hide();
-      win.setVisibleOnAllWorkspaces(true, {
-        visibleOnFullScreen: true,
-        skipTransformProcessType: true
-      });
-
-      const setMacOSAlwaysOnTop = () => {
+      // macOS: Keep window visible across all workspaces, spaces, and fullscreen assessments without stealing focus
+      const applySpaceAndLevel = () => {
         if (win.isDestroyed()) return;
         try {
-          win.setAlwaysOnTop(true, 'screen-saver', 2);
           win.setVisibleOnAllWorkspaces(true, {
             visibleOnFullScreen: true,
             skipTransformProcessType: true
           });
+          win.setAlwaysOnTop(true, 'screen-saver', 2);
           win.setContentProtection(true);
         } catch {
           try { win.setAlwaysOnTop(true, 'pop-up-menu', 2); }
@@ -881,26 +878,28 @@ class WindowManager {
         }
       };
 
-      setMacOSAlwaysOnTop();
+      applySpaceAndLevel();
+
+      // Show inactive so we never steal focus from full-screen assessment apps
+      if (!win.isVisible()) {
+        win.showInactive();
+      }
+      applySpaceAndLevel();
 
       setTimeout(() => {
-        if (win.isDestroyed()) return;
-        win.show();
-        win.focus();
-        setMacOSAlwaysOnTop();
-        setTimeout(() => { if (!win.isDestroyed()) setMacOSAlwaysOnTop(); }, 100);
-        setTimeout(() => {
-          if (win.isDestroyed()) return;
-          setMacOSAlwaysOnTop();
-        }, 300);
-      }, 50);
+        if (!win.isDestroyed()) applySpaceAndLevel();
+      }, 100);
+      setTimeout(() => {
+        if (!win.isDestroyed()) applySpaceAndLevel();
+      }, 300);
     } else {
       // Linux/Windows
       win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
       win.setAlwaysOnTop(true);
       try { win.setContentProtection(true); } catch (e) {}
-      win.show();
-      win.focus();
+      if (!win.isVisible()) {
+        win.showInactive();
+      }
       setTimeout(() => {
         if (win.isDestroyed()) return;
         win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
