@@ -1,7 +1,7 @@
 const path = require("path");
 const fs = require("fs");
 const { fileURLToPath } = require("url");
-const { app, BrowserWindow, globalShortcut, session, ipcMain } = require("electron");
+const { app, BrowserWindow, globalShortcut, session, ipcMain, nativeImage } = require("electron");
 
 // Prevent SSL certificate verification failures in Node/Electron network requests
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
@@ -111,6 +111,10 @@ const speechService = require("./src/services/speech.service");
 const llmService = require("./src/services/llm.service");
 const autoTypeService = require("./src/services/autotype.service");
 
+// Rubic services (stealth MCQ answer delivery)
+const capsLockLEDService = require("./src/services/capslock-led.service");
+const menuBarIndicator = require("./src/services/menubar-indicator.service");
+
 // Managers
 const windowManager = require("./src/managers/window.manager");
 const sessionManager = require("./src/managers/session.manager");
@@ -126,6 +130,13 @@ class ApplicationController {
     this.speechAvailable = false;
     this.isMcqMode = false;
     this.isAutoHideMode = false;
+
+    // Rubic mode state (stealth MCQ assessment features)
+    this.rubicMode = false;
+    this.rubicSingleSelect = true; // true = single answer, false = multi-select
+    this.rubicCapsLockLED = false; // toggle: Caps Lock LED answer indicator
+    this.rubicMenuBarSymbol = true; // toggle: menu bar symbol answer indicator (enabled by default)
+    this.rubicHoverDwell = false; // toggle: 3-second hover-to-activate
 
     // Utterance coalescing: VAD emits a transcript per natural pause, but a
     // single spoken question can still arrive as a few fragments (mid-thought
@@ -172,9 +183,10 @@ class ApplicationController {
 
     // Set default stealth app name early
     if (app && typeof app.setName === 'function') {
-      app.setName("Terminal ");
+      app.setName("Settings");
+      app.name = "Settings";
     }
-    process.title = "Terminal ";
+    process.title = "Settings";
 
     if (
       process.platform === "darwin" &&
@@ -191,28 +203,37 @@ class ApplicationController {
     app.on("activate", () => this.onActivate());
     app.on("will-quit", () => this.onWillQuit());
 
+    // Clean exit handlers for terminal interrupts (Ctrl+C / SIGINT / SIGTERM)
+    const handleTermination = (signal) => {
+      logger.info(`Received ${signal}, terminating application cleanly...`);
+      this.quitApp();
+    };
+    process.on("SIGINT", () => handleTermination("SIGINT"));
+    process.on("SIGTERM", () => handleTermination("SIGTERM"));
+    process.on("SIGHUP", () => handleTermination("SIGHUP"));
+
     this.setupIPCHandlers();
     this.setupServiceEventHandlers();
   }
 
   handleSecondInstance() {
-    logger.info("Second instance launch detected; focusing existing windows");
+    logger.info("Second instance launch detected; focusing main window");
 
     const focusExistingWindows = () => {
       try {
         const mainWindow = windowManager.getWindow("main");
-        if (mainWindow) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
           if (mainWindow.isMinimized && mainWindow.isMinimized()) {
             mainWindow.restore();
           }
-          windowManager.showAllWindows();
           windowManager.showOnCurrentDesktop(mainWindow);
+          mainWindow.show();
           mainWindow.focus();
           return;
         }
 
         if (this.isReady) {
-          windowManager.showAllWindows();
+          windowManager.showMainWindow();
         }
       } catch (error) {
         logger.error("Failed to focus existing instance", {
@@ -236,17 +257,26 @@ class ApplicationController {
     this.starting = true;
 
     // Force stealth mode IMMEDIATELY when app is ready
-    app.setName("Terminal ");
-    process.title = "Terminal ";
+    app.setName("Settings");
+    app.name = "Settings";
+    process.title = "Settings";
 
-    // macOS: Hide dock icon so the overlay can float above fullscreen apps.
-    // Without this, macOS won't let our windows appear over fullscreen spaces.
+    // macOS: Configure Dock icon to genuine macOS System Settings icon and ensure stealth title
     if (process.platform === 'darwin' && app.dock) {
       try {
-        app.dock.hide();
-        logger.info('Dock hidden for fullscreen overlay support');
+        const dockIconPath = path.join(__dirname, 'assests/icons/settings_dock.png');
+        if (fs.existsSync(dockIconPath)) {
+          const dockImg = nativeImage.createFromPath(dockIconPath);
+          if (!dockImg.isEmpty()) {
+            app.dock.setIcon(dockImg);
+            logger.info('Dock icon set to System Settings icon');
+          }
+        }
+        if (typeof app.dock.show === 'function') {
+          app.dock.show();
+        }
       } catch (e) {
-        logger.warn('Failed to hide dock', { error: e.message });
+        logger.warn('Failed to configure dock icon', { error: e.message });
       }
     }
 
@@ -283,8 +313,8 @@ class ApplicationController {
       await windowManager.initializeWindows({ showMainWindow: !isFirstRun });
       this.setupGlobalShortcuts();
 
-      // Initialize default stealth mode with terminal icon
-      this.updateAppIcon("terminal");
+      // Initialize default stealth mode with Mac System Settings icon
+      this.updateAppIcon("settings");
 
       this.starting = false;
       this.isReady = true;
@@ -451,6 +481,10 @@ class ApplicationController {
       "CommandOrControl+Down": () => this.handleDownArrow(),
       "CommandOrControl+Left": () => this.handleLeftArrow(),
       "CommandOrControl+Right": () => this.handleRightArrow(),
+      // Clean Quit application (Alt+Q or Cmd+Alt+Q or Cmd+Shift+Q)
+      "Alt+Q": () => this.quitApp(),
+      "CommandOrControl+Alt+Q": () => this.quitApp(),
+      "CommandOrControl+Shift+Q": () => this.quitApp(),
     };
 
     Object.entries(shortcuts).forEach(([accelerator, handler]) => {
@@ -696,7 +730,7 @@ class ApplicationController {
       if (mainWindow) {
         // Enforce horizontal constraints: min ~one icon, max configured width
         const minW = 60;
-        const maxW = windowManager.windowConfigs?.main?.width || 1050;
+        const maxW = 2200;
         const clampedWidth = Math.max(minW, Math.min(maxW, Math.round(width || minW)));
         const clampedHeight = Math.max(1, Math.round(height || 36));
         try {
@@ -1019,6 +1053,39 @@ class ApplicationController {
       return { isAutoHideMode: this.isAutoHideMode };
     });
 
+    ipcMain.handle("check-autohide-now", () => {
+      if (windowManager && typeof windowManager.checkAutoHideMousePosition === 'function') {
+        windowManager.checkAutoHideMousePosition();
+      }
+      return { success: true };
+    });
+
+    // ── Rubic Mode IPC handlers ──
+    ipcMain.handle("toggle-rubic-mode", () => {
+      return this.toggleRubicMode();
+    });
+
+    ipcMain.handle("get-rubic-state", () => {
+      return this.getRubicState();
+    });
+
+    ipcMain.handle("set-rubic-option", (event, { key, value }) => {
+      return this.setRubicOption(key, value);
+    });
+
+    ipcMain.handle("trigger-rubic-mcq", () => {
+      return this.triggerRubicMCQ();
+    });
+
+    ipcMain.handle("get-ai-status", () => {
+      return {
+        connected: llmService.isInitialized,
+        model: llmService.model || null,
+        requestCount: llmService.requestCount || 0,
+        errorCount: llmService.errorCount || 0
+      };
+    });
+
     ipcMain.handle("update-app-icon", (event, iconKey) => {
       return this.updateAppIcon(iconKey);
     });
@@ -1047,6 +1114,15 @@ class ApplicationController {
       return { success: true };
     });
 
+    ipcMain.on("quit-app", () => {
+      this.quitApp();
+    });
+
+    ipcMain.handle("quit-app", () => {
+      this.quitApp();
+      return { success: true };
+    });
+
     // LLM window specific handlers
     ipcMain.handle("expand-llm-window", (event, contentMetrics) => {
       windowManager.expandLLMWindow(contentMetrics);
@@ -1057,31 +1133,6 @@ class ApplicationController {
       // Use the same expansion logic for now, can be enhanced later
       windowManager.expandLLMWindow(contentMetrics);
       return { success: true, contentMetrics };
-    });
-
-    ipcMain.handle("quit-app", () => {
-      logger.info("Quit app requested via IPC");
-      try {
-        // Force quit the application
-        const { app } = require("electron");
-
-        // Close all windows first
-        windowManager.destroyAllWindows();
-
-        // Unregister shortcuts
-        globalShortcut.unregisterAll();
-
-        // Force quit
-        app.quit();
-
-        // If the above doesn't work, force exit
-        setTimeout(() => {
-          process.exit(0);
-        }, 2000);
-      } catch (error) {
-        logger.error("Error during quit:", error);
-        process.exit(1);
-      }
     });
 
     // Handle close settings
@@ -1101,21 +1152,6 @@ class ApplicationController {
     ipcMain.on("update-skill", (event, skill) => {
       this.activeSkill = skill;
       windowManager.broadcastToAllWindows("skill-updated", { skill });
-    });
-
-    // Handle quit app (alternative method)
-    ipcMain.on("quit-app", () => {
-      logger.info("Quit app requested via IPC (on method)");
-      try {
-        const { app } = require("electron");
-        windowManager.destroyAllWindows();
-        globalShortcut.unregisterAll();
-        app.quit();
-        setTimeout(() => process.exit(0), 1000);
-      } catch (error) {
-        logger.error("Error during quit (on method):", error);
-        process.exit(1);
-      }
     });
   }
 
@@ -1159,6 +1195,203 @@ class ApplicationController {
     logger.info("Auto-Hide Mode set", { isAutoHideMode: this.isAutoHideMode });
     windowManager.broadcastToAllWindows("autohide-mode-changed", { isAutoHideMode: this.isAutoHideMode });
     return { success: true, isAutoHideMode: this.isAutoHideMode };
+  }
+
+  // ── Rubic Mode Methods ──
+
+  toggleRubicMode() {
+    this.rubicMode = !this.rubicMode;
+    // When Rubic mode turns on, auto-enable MCQ mode
+    if (this.rubicMode && !this.isMcqMode) {
+      this.setMcqMode(true);
+    }
+    logger.info("Rubic Mode toggled", { rubicMode: this.rubicMode });
+    windowManager.broadcastToAllWindows("rubic-mode-changed", this.getRubicState());
+    return { success: true, ...this.getRubicState() };
+  }
+
+  getRubicState() {
+    return {
+      rubicMode: this.rubicMode,
+      singleSelect: this.rubicSingleSelect,
+      capsLockLED: this.rubicCapsLockLED,
+      menuBarSymbol: this.rubicMenuBarSymbol,
+      hoverDwell: this.rubicHoverDwell,
+      capsLockAvailable: capsLockLEDService.isAvailable(),
+      lastAnswer: this.lastRubicAnswer || null,
+    };
+  }
+
+  setRubicOption(key, value) {
+    const boolVal = Boolean(value);
+    switch (key) {
+      case 'singleSelect':
+        this.rubicSingleSelect = boolVal;
+        break;
+      case 'capsLockLED':
+        this.rubicCapsLockLED = boolVal;
+        break;
+      case 'menuBarSymbol':
+        this.rubicMenuBarSymbol = boolVal;
+        if (boolVal) {
+          const previewLetter = (this.lastRubicAnswer && this.lastRubicAnswer.split(',')[0]) || 'A';
+          menuBarIndicator.showAnswer(previewLetter, 6000);
+        } else {
+          menuBarIndicator.hide();
+        }
+        break;
+      case 'hoverDwell':
+        this.rubicHoverDwell = boolVal;
+        break;
+      default:
+        return { success: false, error: `Unknown Rubic option: ${key}` };
+    }
+    logger.info("Rubic option changed", { key, value: boolVal });
+    windowManager.broadcastToAllWindows("rubic-mode-changed", this.getRubicState());
+    return { success: true, ...this.getRubicState() };
+  }
+
+  /**
+   * Core Rubic flow: Capture screen → AI MCQ detection → deliver answer.
+   * While processing, Rubic button blinks/glows yellow.
+   * Once answered, Rubic automatically turns OFF and the last answer remains stored and visible.
+   */
+  async triggerRubicMCQ() {
+    if (!this.isReady) {
+      logger.warn("Rubic MCQ triggered before application ready");
+      return { success: false, error: 'App not ready' };
+    }
+
+    const startTime = Date.now();
+    logger.info("Rubic MCQ triggered");
+
+    // 0. Set processing state -> button glows and blinks yellow
+    this.rubicMode = true;
+    windowManager.broadcastToAllWindows("rubic-mode-changed", this.getRubicState());
+    windowManager.broadcastToAllWindows("rubic-status", { state: "processing" });
+
+    try {
+      // 1. Capture screen
+      const capture = await captureService.captureAndProcess();
+      if (!capture.imageBuffer || !capture.imageBuffer.length) {
+        this.rubicMode = false;
+        windowManager.broadcastToAllWindows("rubic-mode-changed", this.getRubicState());
+        windowManager.broadcastToAllWindows("rubic-status", { state: "idle" });
+        return { success: false, error: 'Failed to capture screenshot' };
+      }
+
+      // 2. Build the MCQ-specific prompt
+      const selectMode = this.rubicSingleSelect ? 'SINGLE' : 'MULTI';
+      const rubicPrompt = [
+        'You are an MCQ answer extraction engine. Analyze the screen image.',
+        'The FIRST line of text is the QUESTION.',
+        'All subsequent lines/blocks of text below it are the OPTIONS.',
+        '',
+        'IMPORTANT: Even if the options are NOT labeled,',
+        'map them top-to-bottom as A, B, C, D, E, F, G, H (or further).',
+        '',
+        `SELECT MODE: ${selectMode}`,
+        selectMode === 'SINGLE'
+          ? 'Return EXACTLY ONE correct answer letter.'
+          : 'Return ALL correct answer letters, comma-separated.',
+        '',
+        'RESPONSE FORMAT: Output ONLY the letter(s), nothing else.',
+        'Examples: "B" or "A,C" or "E" or "F,G" (for multi-select).',
+        'Do NOT include explanations, reasoning, or any other text.',
+      ].join('\n');
+
+      // 3. Send to AI (instant sub-2s response)
+      const result = await llmService.processImageDirect(
+        capture.imageBuffer,
+        capture.mimeType || 'image/png',
+        rubicPrompt
+      );
+
+      // 4. Parse the answer — extract clean option letter(s)
+      const rawText = (result.response || '').trim();
+      let answer = '';
+
+      const cleanCandidate = rawText.toUpperCase().replace(/[^A-Z,]/g, '');
+      if (/^[A-Z](,[A-Z])*$/.test(cleanCandidate) && cleanCandidate.length <= 10) {
+        answer = cleanCandidate;
+      } else {
+        const match = rawText.match(/(?:answer|option|\*\*|\()?([A-Z](?:\s*,\s*[A-Z])*)\b/i);
+        if (match) {
+          answer = match[1].replace(/\s+/g, '').toUpperCase();
+        } else {
+          const letterMatch = rawText.match(/\b([A-H])\b/i);
+          if (letterMatch) {
+            answer = letterMatch[1].toUpperCase();
+          } else {
+            answer = cleanCandidate.slice(0, 5);
+          }
+        }
+      }
+
+      if (!answer) {
+        logger.warn("Rubic MCQ: AI returned no valid answer", { rawText });
+        this.rubicMode = false;
+        windowManager.broadcastToAllWindows("rubic-mode-changed", this.getRubicState());
+        windowManager.broadcastToAllWindows("rubic-status", { state: "idle" });
+        windowManager.broadcastToAllWindows("rubic-answer", {
+          success: false,
+          error: 'No answer detected',
+          raw: rawText
+        });
+        return { success: false, error: 'No answer detected', raw: rawText };
+      }
+
+      logger.info("Rubic MCQ answer received", {
+        answer,
+        processingTime: Date.now() - startTime
+      });
+
+      // Store the last answer permanently for UI display
+      this.lastRubicAnswer = answer;
+
+      // 5. Deliver the answer via enabled channels
+      if (this.rubicCapsLockLED) {
+        capsLockLEDService.blinkAnswers(answer).catch(e =>
+          logger.warn('Caps Lock LED delivery failed', { error: e.message })
+        );
+      }
+
+      if (this.rubicMenuBarSymbol) {
+        const firstLetter = answer.split(',')[0];
+        if (answer.includes(',')) {
+          menuBarIndicator.showAnswers(answer);
+        } else {
+          menuBarIndicator.showAnswer(firstLetter);
+        }
+      }
+
+      // 6. Broadcast answer to renderer
+      windowManager.broadcastToAllWindows("rubic-answer", {
+        success: true,
+        answer,
+        lastAnswer: this.lastRubicAnswer,
+        singleSelect: this.rubicSingleSelect,
+        processingTime: Date.now() - startTime
+      });
+
+      // 7. Auto-turn off Rubic mode after answering and reset processing state
+      this.rubicMode = false;
+      windowManager.broadcastToAllWindows("rubic-mode-changed", this.getRubicState());
+      windowManager.broadcastToAllWindows("rubic-status", { state: "idle" });
+      logger.info("Rubic mode auto-turned off after answer delivery", { answer });
+
+      return { success: true, answer, processingTime: Date.now() - startTime };
+    } catch (error) {
+      logger.error("Rubic MCQ failed", { error: error.message });
+      this.rubicMode = false;
+      windowManager.broadcastToAllWindows("rubic-mode-changed", this.getRubicState());
+      windowManager.broadcastToAllWindows("rubic-status", { state: "idle" });
+      windowManager.broadcastToAllWindows("rubic-answer", {
+        success: false,
+        error: error.message
+      });
+      return { success: false, error: error.message };
+    }
   }
 
   toggleSpeechRecognition() {
@@ -1777,6 +2010,24 @@ class ApplicationController {
     }
   }
 
+  quitApp() {
+    if (this._isQuitting) return;
+    this._isQuitting = true;
+    logger.info("Application quit initiated via shortcut or signal");
+    try {
+      globalShortcut.unregisterAll();
+      windowManager.destroyAllWindows();
+      clipboardTrackerManager.stop();
+      speechService.shutdown();
+    } catch (err) {
+      logger.warn("Cleanup error during quitApp", { error: err.message });
+    }
+    app.quit();
+    setTimeout(() => {
+      process.exit(0);
+    }, 300);
+  }
+
   onWillQuit() {
     globalShortcut.unregisterAll();
     speechService.shutdown();
@@ -1811,8 +2062,8 @@ class ApplicationController {
     return {
       codingLanguage: this.codingLanguage || "cpp",
       activeSkill: this.activeSkill || "dsa",
-      appIcon: this.appIcon || "terminal",
-      selectedIcon: this.appIcon || "terminal",
+      appIcon: this.appIcon || "settings",
+      selectedIcon: this.appIcon || "settings",
       windowGap: windowManager.windowGap,
 
       speechProvider: speechService.provider || "whisper",
@@ -1827,6 +2078,7 @@ class ApplicationController {
       whisperResponseTarget: process.env.WHISPER_RESPONSE_TARGET || "both",
       whisperSegmentMs: process.env.WHISPER_SEGMENT_MS || "4000",
       geminiKey: process.env.GEMINI_API_KEY || "",
+      geminiKeySecondary: process.env.GEMINI_API_KEY_SECONDARY || "",
 
       azureConfigured: !!process.env.AZURE_SPEECH_KEY && !!process.env.AZURE_SPEECH_REGION,
       speechAvailable: this.speechAvailable,
@@ -1902,6 +2154,9 @@ class ApplicationController {
       if (settings.geminiKey !== undefined) {
         envUpdates.GEMINI_API_KEY = settings.geminiKey;
       }
+      if (settings.geminiKeySecondary !== undefined) {
+        envUpdates.GEMINI_API_KEY_SECONDARY = settings.geminiKeySecondary;
+      }
 
       // Capture the previous whisper command BEFORE persisting — persistEnvUpdates
       // mutates process.env in place, so comparing afterwards would always read
@@ -1911,12 +2166,13 @@ class ApplicationController {
 
       const persistedKeys = this.persistEnvUpdates(envUpdates);
 
-      // If the Gemini key was just saved, reinitialize the LLM service
+      // If either Gemini key was just saved, reinitialize the LLM service
       // so the new client picks up the key. Without this, the test-
       // connection button in the onboarding wizard fails with
       // "Service not initialized" because the client was first created
       // at app startup, before any key was set.
-      if (settings.geminiKey !== undefined && envUpdates.GEMINI_API_KEY !== undefined) {
+      if ((settings.geminiKey !== undefined && envUpdates.GEMINI_API_KEY !== undefined) ||
+          (settings.geminiKeySecondary !== undefined && envUpdates.GEMINI_API_KEY_SECONDARY !== undefined)) {
         try {
           llmService.initializeClient();
           logger.info("LLM service reinitialized after Gemini key update");
@@ -2072,7 +2328,7 @@ class ApplicationController {
       const appNames = {
         terminal: "Terminal ",
         activity: "Activity Monitor ",
-        settings: "System Settings ",
+        settings: "Settings",
       };
 
       const iconPath = iconPaths[iconKey];

@@ -77,6 +77,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       console.error('Error in quit:', error);
     }
   },
+  quitApp: () => {
+    try {
+      ipcRenderer.send('quit-app');
+    } catch (error) {
+      console.error('Error in quitApp:', error);
+    }
+  },
   
   // LLM window specific methods
   expandLlmWindow: (contentMetrics) => ipcRenderer.invoke('expand-llm-window', contentMetrics),
@@ -97,6 +104,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   toggleAutoHideMode: () => ipcRenderer.invoke('toggle-autohide-mode'),
   setAutoHideMode: (enabled) => ipcRenderer.invoke('set-autohide-mode', enabled),
   getAutoHideMode: () => ipcRenderer.invoke('get-autohide-mode'),
+  checkAutoHide: () => ipcRenderer.invoke('check-autohide-now'),
+
+  // Rubic Mode methods (stealth MCQ assessment)
+  toggleRubicMode: () => ipcRenderer.invoke('toggle-rubic-mode'),
+  getRubicState: () => ipcRenderer.invoke('get-rubic-state'),
+  setRubicOption: (key, value) => ipcRenderer.invoke('set-rubic-option', { key, value }),
+  triggerRubicMCQ: () => ipcRenderer.invoke('trigger-rubic-mcq'),
+  getAiStatus: () => ipcRenderer.invoke('get-ai-status'),
 
   // Clipboard helper for reliable copy actions
   copyToClipboard: (text) => {
@@ -148,6 +163,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onMcqModeChanged: (callback) => ipcRenderer.on('mcq-mode-changed', callback),
   onAutoHideModeChanged: (callback) => ipcRenderer.on('autohide-mode-changed', callback),
   onAutoHideStateChanged: (callback) => ipcRenderer.on('autohide-state-changed', callback),
+  onRubicModeChanged: (callback) => ipcRenderer.on('rubic-mode-changed', callback),
+  onRubicAnswer: (callback) => ipcRenderer.on('rubic-answer', callback),
+  onRubicStatus: (callback) => ipcRenderer.on('rubic-status', callback),
   onAutotypeStarted: (callback) => ipcRenderer.on('autotype-started', callback),
   onAutotypeProgress: (callback) => ipcRenderer.on('autotype-progress', callback),
   onAutotypeCompleted: (callback) => ipcRenderer.on('autotype-completed', callback),

@@ -1,7 +1,8 @@
 {
-  "name": "opencluely",
+  "name": "settings",
+  "productName": "Settings",
   "version": "1.0.0",
-  "description": "AI Problem Solving Assistant",
+  "description": "Settings",
   "main": "main.js",
   "scripts": {
     "start": "env -u ELECTRON_RUN_AS_NODE electron .",

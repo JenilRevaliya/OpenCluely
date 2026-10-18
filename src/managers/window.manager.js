@@ -45,7 +45,7 @@ class WindowManager {
     
     this.windowConfigs = {
       main: {
-        width: 1020,
+        width: 1450,
         height: 40,
         useContentSize: true,
         file: 'index.html',
@@ -396,9 +396,9 @@ class WindowManager {
         backgroundColor: '#00000000',
   // Allow resizing so users can adjust width; we will lock height in handlers
   resizable: true,
-    // Keep the original max width as cap; allow small min width so it can collapse to one icon
+    // Allow wide bar up to 2200px so all tools fit and user can resize
     minWidth: 60,
-    maxWidth: this.windowConfigs.main.width,
+    maxWidth: 2200,
         minimizable: false,
         maximizable: false,
         closable: false,
@@ -556,7 +556,7 @@ class WindowManager {
             event.preventDefault();
             // Enforce width within min/max bounds
             const minW = 60;
-            const maxW = this.windowConfigs.main.width;
+            const maxW = 2200;
             const desiredW = Math.max(minW, Math.min(maxW, Math.round(newBounds.width || minW)));
             window.setContentSize(desiredW, Math.max(1, currentContentHeight));
           } catch (e) {
@@ -565,7 +565,7 @@ class WindowManager {
               const [__w, currentWindowHeight] = window.getSize();
               event.preventDefault();
               const minW = 60;
-              const maxW = this.windowConfigs.main.width;
+              const maxW = 2200;
               const desiredW = Math.max(minW, Math.min(maxW, Math.round(newBounds.width || minW)));
               window.setSize(desiredW, Math.max(1, currentWindowHeight));
             } catch { /* noop */ }
@@ -1090,27 +1090,23 @@ class WindowManager {
       return;
     }
 
-    this.windows.forEach((window, type) => {
-      if (type !== 'llmResponse') { // Don't show LLM response unless it has content
-        this.showOnCurrentDesktop(window);
-      }
-    });
-    
-    this.isVisible = true;
-    const activeWindow = this.windows.get(this.activeWindow);
-    if (activeWindow) {
-      activeWindow.focus();
+    // Only show the main toolbar window. Auxiliary windows (chat, settings, clipboard, targetBox)
+    // are on-demand dialogs and must remain hidden unless specifically opened by the user.
+    const mainWindow = this.windows.get('main');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      this.showOnCurrentDesktop(mainWindow);
+      mainWindow.focus();
     }
     
-    logger.info('All windows shown on current desktop', { 
-      activeWindow: this.activeWindow,
-      windowCount: this.windows.size 
-    });
+    this.isVisible = true;
+    this.activeWindow = 'main';
+    
+    logger.info('Main window shown on current desktop');
   }
 
   hideAllWindows() {
-    this.windows.forEach((window, type) => {
-      if (type !== 'llmResponse') {
+    this.windows.forEach((window) => {
+      if (window && !window.isDestroyed()) {
         window.hide();
       }
     });
@@ -1124,10 +1120,15 @@ class WindowManager {
       return this.isVisible;
     }
 
-    if (this.isVisible) {
+    const mainWindow = this.windows.get('main');
+    const isMainVisible = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible();
+
+    if (isMainVisible) {
       this.hideAllWindows();
+      this.isVisible = false;
     } else {
       this.showAllWindows();
+      this.isVisible = true;
     }
     
     return this.isVisible;
@@ -1177,16 +1178,21 @@ class WindowManager {
 
   startAutoHideWatcher() {
     if (this.autoHideWatcher) clearInterval(this.autoHideWatcher);
+    this._autoHideHideTimeout = null;
     this.autoHideWatcher = setInterval(() => {
       this.checkAutoHideMousePosition();
-    }, 50);
-    logger.info('Started Auto-Hide mouse position watcher');
+    }, 25);
+    logger.info('Started Auto-Hide mouse position watcher (25ms interval)');
   }
 
   stopAutoHideWatcher() {
     if (this.autoHideWatcher) {
       clearInterval(this.autoHideWatcher);
       this.autoHideWatcher = null;
+    }
+    if (this._autoHideHideTimeout) {
+      clearTimeout(this._autoHideHideTimeout);
+      this._autoHideHideTimeout = null;
     }
     this.setAutoHideVisibility('visible');
     logger.info('Stopped Auto-Hide mouse position watcher');
@@ -1199,43 +1205,38 @@ class WindowManager {
     if (!mainWin || mainWin.isDestroyed()) return;
 
     const point = screen.getCursorScreenPoint();
-    const barBounds = mainWin.getBounds();
-    const padding = 15; // 15px safety padding around bounds
+    const bounds = mainWin.getBounds();
 
+    // Cache valid bounds so we always have the accurate location
+    if (bounds.width > 50 && bounds.height > 15) {
+      this._lastKnownBarBounds = { ...bounds };
+    }
+    const barBounds = this._lastKnownBarBounds || bounds;
+
+    // Strict detection: ONLY when cursor is right on top of the bar (no padding / no proximity reveal)
     const isCursorInBar = (
-      point.x >= barBounds.x - padding &&
-      point.x <= barBounds.x + barBounds.width + padding &&
-      point.y >= barBounds.y - padding &&
-      point.y <= barBounds.y + barBounds.height + padding
+      point.x >= barBounds.x &&
+      point.x <= barBounds.x + barBounds.width &&
+      point.y >= barBounds.y &&
+      point.y <= barBounds.y + barBounds.height
     );
 
     if (this.autoHideState === 'visible') {
-      // Currently visible: stay visible if cursor is touching bar OR any open child window
-      let isCursorInAnyActiveArea = isCursorInBar;
-
-      if (!isCursorInAnyActiveArea) {
-        this.windows.forEach((win, type) => {
-          if (type !== 'main' && !win.isDestroyed() && win.isVisible()) {
-            const b = win.getBounds();
-            if (
-              point.x >= b.x - padding &&
-              point.x <= b.x + b.width + padding &&
-              point.y >= b.y - padding &&
-              point.y <= b.y + b.height + padding
-            ) {
-              isCursorInAnyActiveArea = true;
-            }
-          }
-        });
-      }
-
-      // If cursor left both bar and open windows, hide!
-      if (!isCursorInAnyActiveArea) {
+      if (!isCursorInBar) {
+        // Cursor moved away from bar — hide INSTANTLY (0 delay)
+        if (this._autoHideHideTimeout) {
+          clearTimeout(this._autoHideHideTimeout);
+          this._autoHideHideTimeout = null;
+        }
         this.setAutoHideVisibility('hidden');
       }
     } else {
-      // Currently hidden: ONLY moving cursor into BAR position reveals them again!
+      // Currently hidden — ONLY show up when cursor is right on top of it!
       if (isCursorInBar) {
+        if (this._autoHideHideTimeout) {
+          clearTimeout(this._autoHideHideTimeout);
+          this._autoHideHideTimeout = null;
+        }
         this.setAutoHideVisibility('visible');
       }
     }
@@ -1259,7 +1260,7 @@ class WindowManager {
         }
       });
     } else {
-      // Restore visibility to 100% and restore interactive state
+      // Restore visibility and interactive state
       this.windows.forEach((win, type) => {
         if (!win.isDestroyed()) {
           try {

@@ -23,6 +23,18 @@ class MainWindowUI {
         this.isRecording = false;
         this.speechAvailable = false; // track availability
         this._popoverHideTimeout = null;
+        // Rubic stealth MCQ state
+        this.rubicMode = false;
+        this.rubicSingleSelect = true;
+        this.rubicCapsLockLED = false;
+        this.rubicMenuBarSymbol = true;
+        this.rubicHoverDwell = false;
+        this.rubicButton = null;
+        this.aiStatusDot = null;
+        this.rubicToggles = null;
+        this.rubicAnswerBadge = null;
+        this._aiStatusInterval = null;
+        this._rubicAnswerTimeout = null;
         // Renderer-side audio capture state (used for Whisper on Windows)
         this._audioContext = null;
         this._mediaStream = null;
@@ -56,6 +68,12 @@ class MainWindowUI {
             
             // Load Auto-Hide mode state
             await this.loadAutoHideMode();
+
+            // Load Rubic state
+            await this.loadRubicState();
+
+            // Start AI status polling
+            this.startAiStatusPolling();
             
             this.updateSkillIndicator();
             this.updateAllElementStates(); // Update all elements with current state
@@ -182,6 +200,7 @@ class MainWindowUI {
         this.updateAutoHideToggleState();
         this.updateAutoTypeState();
         this.updateSettingsIndicatorState();
+        this.updateRubicUI();
     }
 
     updateStatusDot() {
@@ -282,10 +301,8 @@ class MainWindowUI {
         if (!this.mcqToggle) return;
         if (this.isMcqMode) {
             this.mcqToggle.classList.add('mcq-active');
-            this.mcqToggle.title = 'MCQ Mode ON (⌥M to toggle)';
         } else {
             this.mcqToggle.classList.remove('mcq-active');
-            this.mcqToggle.title = 'MCQ Mode OFF (⌥M to toggle)';
         }
         this.resizeWindowToContent();
     }
@@ -294,10 +311,8 @@ class MainWindowUI {
         if (!this.autoHideToggle) return;
         if (this.isAutoHideMode) {
             this.autoHideToggle.classList.add('autohide-active');
-            this.autoHideToggle.title = 'Auto-Hide ON (⌥H to toggle)';
         } else {
             this.autoHideToggle.classList.remove('autohide-active');
-            this.autoHideToggle.title = 'Auto-Hide OFF (⌥H to toggle)';
         }
         this.resizeWindowToContent();
     }
@@ -306,10 +321,8 @@ class MainWindowUI {
         if (!this.autoTypeButton) return;
         if (this.isTyping) {
             this.autoTypeButton.classList.add('typing-active');
-            this.autoTypeButton.title = 'Typing clipboard content... (Click or press ⌥V to stop)';
         } else {
             this.autoTypeButton.classList.remove('typing-active');
-            this.autoTypeButton.title = 'Smart Auto-Type Clipboard (90-120 WPM) (⌥V / Alt+V)';
             if (this.autoTypeProgressFill) {
                 this.autoTypeProgressFill.style.width = '0%';
             }
@@ -326,7 +339,6 @@ class MainWindowUI {
         this._lastAutoTypeData = data;
         if (this.autoTypeButton && !this.autoTypeButton.classList.contains('typing-active')) {
             this.autoTypeButton.classList.add('typing-active');
-            this.autoTypeButton.title = 'Typing clipboard content... (Click or press ⌥V to stop)';
         }
 
         const percent = data.percent !== undefined ? data.percent : (data.total ? Math.round((data.index / data.total) * 100) : 0);
@@ -372,28 +384,34 @@ class MainWindowUI {
         setTimeout(() => {
             const commandTab = document.querySelector('.command-tab');
             if (commandTab && window.electronAPI && window.electronAPI.resizeWindow) {
+                const savedScale = Math.min(1.0, Math.max(0.55, parseFloat(localStorage.getItem('userBarScale') || '1.0')));
+                commandTab.style.zoom = savedScale;
+
+                commandTab.style.width = 'max-content';
+                commandTab.style.minWidth = 'max-content';
+
                 const rect = commandTab.getBoundingClientRect();
-                const scrollWidth = commandTab.scrollWidth || rect.width;
-                let width = Math.ceil(Math.max(rect.width, scrollWidth)) + 4;
+                let width = Math.ceil(rect.width) + 4;
                 let height = Math.ceil(rect.height) + 2;
 
                 // If shortcuts popover is visible, extend height and width to fit it
                 if (this.shortcutsPopover && this.shortcutsPopover.classList.contains('is-open')) {
                     const popRect = this.shortcutsPopover.getBoundingClientRect();
-                    height = Math.max(height, Math.ceil(36 + popRect.height + 12));
-                    width = Math.max(width, Math.ceil(popRect.right + 12));
+                    height = Math.max(height, Math.ceil(rect.height + popRect.height + 16));
+                    width = Math.max(width, Math.ceil(popRect.right + 16));
                 }
 
                 // If clipboard popover is visible, extend height and width to fit it
                 if (this.clipboardPopover && this.clipboardPopover.classList.contains('is-open')) {
                     const popRect = this.clipboardPopover.getBoundingClientRect();
-                    height = Math.max(height, Math.ceil(36 + popRect.height + 12));
-                    width = Math.max(width, Math.ceil(popRect.right + 12));
+                    height = Math.max(height, Math.ceil(rect.height + popRect.height + 16));
+                    width = Math.max(width, Math.ceil(popRect.right + 16));
                 }
                 
                 logger.debug('Resizing window to content', {
                     width,
                     height,
+                    scale: savedScale,
                     component: 'MainWindowUI'
                 });
                 
@@ -420,16 +438,107 @@ class MainWindowUI {
         this.clipboardHistoryBtn = document.getElementById('clipboardHistoryBtn');
         this.clipboardPopover = document.getElementById('clipboardPopover');
 
+        // Apply saved proportional scale on startup
+        const initialScale = Math.min(1.0, Math.max(0.55, parseFloat(localStorage.getItem('userBarScale') || '1.0')));
+        const initialCommandTab = document.querySelector('.command-tab');
+        if (initialCommandTab) {
+            initialCommandTab.style.zoom = initialScale;
+        }
+
+        // Ensure NO hover comments or tooltips exist anywhere on any button (defeats hidden feature)
+        try {
+            document.querySelectorAll('[title]').forEach(el => el.removeAttribute('title'));
+            const titleObserver = new MutationObserver((mutations) => {
+                for (const m of mutations) {
+                    if (m.type === 'attributes' && m.attributeName === 'title' && m.target && m.target.removeAttribute) {
+                        m.target.removeAttribute('title');
+                    }
+                }
+            });
+            titleObserver.observe(document.documentElement, { attributes: true, subtree: true, attributeFilter: ['title'] });
+        } catch (_) {}
+
+        // Rubic elements
+        this.rubicButton = document.getElementById('rubicButton');
+        this.rubicButtonLabel = document.getElementById('rubicButtonLabel') || (this.rubicButton ? this.rubicButton.querySelector('span') : null);
+        this.aiStatusDot = document.getElementById('aiStatusDot');
+        this.rubicAnswerBox = document.getElementById('rubicAnswerBox');
+        this.rubicAnswerVal = document.getElementById('rubicAnswerVal');
+        this.rubicToggles = document.getElementById('rubicToggles');
+        this.rubicToggleSingle = document.getElementById('rubicToggleSingle');
+        this.rubicSingleLabel = document.getElementById('rubicSingleLabel');
+        this.rubicToggleLED = document.getElementById('rubicToggleLED');
+        this.rubicToggleMenuBar = document.getElementById('rubicToggleMenuBar');
+
+        // Expand/Collapse bar mode (Minimal MCQ vs Full Options)
+        this.expandBarBtn = document.getElementById('expandBarBtn');
+        this.expandBarIcon = document.getElementById('expandBarIcon');
+        this.extendedToolsGroup = document.getElementById('extendedToolsGroup');
+        this.isBarExpanded = localStorage.getItem('barExpanded') === 'true'; // default false (minimal MCQ mode)
+
+        this.applyBarMode = () => {
+            const commandTab = document.querySelector('.command-tab');
+            if (!commandTab || !this.expandBarBtn || !this.expandBarIcon) return;
+
+            const savedScale = Math.min(1.0, Math.max(0.55, parseFloat(localStorage.getItem('userBarScale') || '1.0')));
+            commandTab.style.zoom = savedScale;
+
+            if (this.isBarExpanded) {
+                commandTab.classList.remove('is-minimal');
+                this.expandBarBtn.classList.add('is-expanded');
+                this.expandBarIcon.className = 'fas fa-chevron-left';
+            } else {
+                commandTab.classList.add('is-minimal');
+                this.expandBarBtn.classList.remove('is-expanded');
+                this.expandBarIcon.className = 'fas fa-chevron-right';
+            }
+
+            commandTab.style.width = 'max-content';
+            commandTab.style.minWidth = 'max-content';
+
+            this.resizeWindowToContent();
+        };
+
+        const toggleExpandAction = () => {
+            if (!this.isInteractive) return;
+            this.isBarExpanded = !this.isBarExpanded;
+            localStorage.setItem('barExpanded', this.isBarExpanded ? 'true' : 'false');
+            this.applyBarMode();
+        };
+
+        if (this.expandBarBtn) {
+            this.expandBarBtn.addEventListener('click', toggleExpandAction);
+            if (window.RubicHoverDwell) {
+                window.RubicHoverDwell.attach(this.expandBarBtn, toggleExpandAction);
+            }
+        }
+
+        // Apply initial bar mode
+        this.applyBarMode();
+
+        // Restore last detected answer if stored in localStorage
+        try {
+            const savedAnswer = localStorage.getItem('rubicLastAnswer');
+            if (savedAnswer && this.rubicAnswerVal && this.rubicAnswerBox) {
+                this.rubicAnswerVal.textContent = savedAnswer;
+                this.rubicAnswerBox.style.display = 'inline-flex';
+            }
+        } catch (_) {}
+
         if (!this.skillIndicator || !this.micButton || !this.screenshotButton) {
             throw new Error('Required UI elements not found');
         }
 
-        // Screenshot click handler
-        this.screenshotButton.addEventListener('click', () => {
+        // 1. Screenshot click & hover-dwell handler
+        const triggerScreenshotAction = () => {
             if (this.isInteractive && window.electronAPI && window.electronAPI.takeScreenshot) {
                 window.electronAPI.takeScreenshot();
             }
-        });
+        };
+        this.screenshotButton.addEventListener('click', triggerScreenshotAction);
+        if (window.RubicHoverDwell) {
+            window.RubicHoverDwell.attach(this.screenshotButton, triggerScreenshotAction);
+        }
 
         if (this.targetModeBtn) {
             this.targetModeBtn.addEventListener('click', () => {
@@ -455,50 +564,141 @@ class MainWindowUI {
             });
         }
 
-        // MCQ toggle click handler
+        // 2. MCQ toggle click & hover-dwell handler
+        const toggleMcqAction = async () => {
+            if (!this.isInteractive) return;
+            if (window.electronAPI && window.electronAPI.toggleMcqMode) {
+                try {
+                    const res = await window.electronAPI.toggleMcqMode();
+                    this.isMcqMode = res ? res.isMcqMode : !this.isMcqMode;
+                    this.updateMcqToggleState();
+                } catch (e) {
+                    logger.error('Failed to toggle MCQ mode', e);
+                }
+            }
+        };
         if (this.mcqToggle) {
-            this.mcqToggle.addEventListener('click', async () => {
-                if (!this.isInteractive) return;
-                if (window.electronAPI && window.electronAPI.toggleMcqMode) {
-                    try {
-                        const res = await window.electronAPI.toggleMcqMode();
-                        this.isMcqMode = res ? res.isMcqMode : !this.isMcqMode;
-                        this.updateMcqToggleState();
-                    } catch (e) {
-                        logger.error('Failed to toggle MCQ mode', e);
-                    }
-                }
-            });
+            this.mcqToggle.addEventListener('click', toggleMcqAction);
+            if (window.RubicHoverDwell) {
+                window.RubicHoverDwell.attach(this.mcqToggle, toggleMcqAction);
+            }
         }
 
-        // Auto-Hide toggle click handler
+        // 3. Rubic Universal Button (Instant MCQ scan: Click OR Hover 3s)
+        const triggerRubicAction = async () => {
+            if (!this.isInteractive) return;
+            if (window.electronAPI && window.electronAPI.triggerRubicMCQ) {
+                try {
+                    if (this.rubicButton) {
+                        this.rubicButton.classList.add('rubic-processing');
+                    }
+                    if (this.rubicButtonLabel) {
+                        this.rubicButtonLabel.textContent = 'Thinking...';
+                    }
+                    await window.electronAPI.triggerRubicMCQ();
+                } catch (e) {
+                    logger.error('Rubic MCQ trigger failed', e);
+                    if (this.rubicButton) {
+                        this.rubicButton.classList.remove('rubic-processing');
+                    }
+                    if (this.rubicButtonLabel) {
+                        this.rubicButtonLabel.textContent = 'Rubic';
+                    }
+                }
+            }
+        };
+        if (this.rubicButton) {
+            this.rubicButton.addEventListener('click', triggerRubicAction);
+            if (window.RubicHoverDwell) {
+                window.RubicHoverDwell.attach(this.rubicButton, triggerRubicAction);
+            }
+        }
+
+        // 4. Rubic sub-toggle: Single/Multi select (1 / M)
+        if (this.rubicToggleSingle) {
+            const toggleSingleAction = async () => {
+                if (!this.isInteractive) return;
+                this.rubicSingleSelect = !this.rubicSingleSelect;
+                if (window.electronAPI && window.electronAPI.setRubicOption) {
+                    await window.electronAPI.setRubicOption('singleSelect', this.rubicSingleSelect);
+                }
+                this.updateRubicToggles();
+                this.resizeWindowToContent();
+            };
+            this.rubicToggleSingle.addEventListener('click', toggleSingleAction);
+            if (window.RubicHoverDwell) {
+                window.RubicHoverDwell.attach(this.rubicToggleSingle, toggleSingleAction);
+            }
+        }
+
+        // 5. Rubic sub-toggle: Caps Lock LED
+        if (this.rubicToggleLED) {
+            const toggleLEDAction = async () => {
+                if (!this.isInteractive) return;
+                this.rubicCapsLockLED = !this.rubicCapsLockLED;
+                if (window.electronAPI && window.electronAPI.setRubicOption) {
+                    await window.electronAPI.setRubicOption('capsLockLED', this.rubicCapsLockLED);
+                }
+                this.updateRubicToggles();
+            };
+            this.rubicToggleLED.addEventListener('click', toggleLEDAction);
+            if (window.RubicHoverDwell) {
+                window.RubicHoverDwell.attach(this.rubicToggleLED, toggleLEDAction);
+            }
+        }
+
+        // 6. Rubic sub-toggle: Menu Bar Symbol
+        if (this.rubicToggleMenuBar) {
+            const toggleMenuBarAction = async () => {
+                if (!this.isInteractive) return;
+                this.rubicMenuBarSymbol = !this.rubicMenuBarSymbol;
+                if (window.electronAPI && window.electronAPI.setRubicOption) {
+                    await window.electronAPI.setRubicOption('menuBarSymbol', this.rubicMenuBarSymbol);
+                }
+                this.updateRubicToggles();
+            };
+            this.rubicToggleMenuBar.addEventListener('click', toggleMenuBarAction);
+            if (window.RubicHoverDwell) {
+                window.RubicHoverDwell.attach(this.rubicToggleMenuBar, toggleMenuBarAction);
+            }
+        }
+
+        // 7. Auto-Hide toggle click & hover-dwell handler
+        const toggleAutoHideAction = async () => {
+            if (!this.isInteractive) return;
+            if (window.electronAPI && window.electronAPI.toggleAutoHideMode) {
+                try {
+                    const res = await window.electronAPI.toggleAutoHideMode();
+                    this.isAutoHideMode = res ? res.isAutoHideMode : !this.isAutoHideMode;
+                    this.updateAutoHideToggleState();
+                } catch (e) {
+                    logger.error('Failed to toggle Auto-Hide mode', e);
+                }
+            }
+        };
         if (this.autoHideToggle) {
-            this.autoHideToggle.addEventListener('click', async () => {
-                if (!this.isInteractive) return;
-                if (window.electronAPI && window.electronAPI.toggleAutoHideMode) {
-                    try {
-                        const res = await window.electronAPI.toggleAutoHideMode();
-                        this.isAutoHideMode = res ? res.isAutoHideMode : !this.isAutoHideMode;
-                        this.updateAutoHideToggleState();
-                    } catch (e) {
-                        logger.error('Failed to toggle Auto-Hide mode', e);
-                    }
-                }
-            });
+            this.autoHideToggle.addEventListener('click', toggleAutoHideAction);
+            if (window.RubicHoverDwell) {
+                window.RubicHoverDwell.attach(this.autoHideToggle, toggleAutoHideAction);
+            }
         }
 
-        // Auto-type clipboard click handler
-        if (this.autoTypeButton) {
-            this.autoTypeButton.addEventListener('click', async () => {
-                if (!this.isInteractive) return;
-                if (window.electronAPI && window.electronAPI.typeClipboard) {
-                    try {
-                        await window.electronAPI.typeClipboard();
-                    } catch (e) {
-                        logger.error('Failed to trigger auto-type', e);
-                    }
+        // 8. Auto-type clipboard click & hover-dwell handler
+        const triggerAutoTypeAction = async () => {
+            if (!this.isInteractive) return;
+            if (window.electronAPI && window.electronAPI.typeClipboard) {
+                try {
+                    await window.electronAPI.typeClipboard();
+                } catch (e) {
+                    logger.error('Failed to trigger auto-type', e);
                 }
-            });
+            }
+        };
+        if (this.autoTypeButton) {
+            this.autoTypeButton.addEventListener('click', triggerAutoTypeAction);
+            if (window.RubicHoverDwell) {
+                window.RubicHoverDwell.attach(this.autoTypeButton, triggerAutoTypeAction);
+            }
         }
 
         // Opacity / Transparency slider handler
@@ -518,6 +718,137 @@ class MainWindowUI {
             });
             // Prevent drag region from stealing the slider interaction
             this.opacitySlider.addEventListener('mousedown', (e) => e.stopPropagation());
+        }
+
+        // Corner resize handle (bottom-right) - Proportional Dimension Ratio Scaling
+        this.barResizeHandle = document.getElementById('barResizeHandle');
+        if (this.barResizeHandle) {
+            let isResizing = false;
+            let startX = 0;
+            let startY = 0;
+            let startScale = 1.0;
+
+            const onMouseMove = (moveEvent) => {
+                if (!isResizing) return;
+                moveEvent.preventDefault();
+                const deltaX = moveEvent.screenX - startX;
+                const deltaY = moveEvent.screenY - startY;
+                // Dragging right/down increases scale up to 1.0; dragging left/up decreases scale down to 0.55
+                const delta = (deltaX * 0.7) + (deltaY * 0.3);
+                const deltaScale = delta / 260;
+                let newScale = startScale + deltaScale;
+                // Maximum size is the current size (1.0), but can scale smaller down to 0.55
+                newScale = Math.min(1.0, Math.max(0.55, Math.round(newScale * 100) / 100));
+
+                const cmdTab = document.querySelector('.command-tab');
+                if (cmdTab) {
+                    cmdTab.style.zoom = newScale;
+                    const rect = cmdTab.getBoundingClientRect();
+                    const w = Math.ceil(rect.width) + 4;
+                    const h = Math.ceil(rect.height) + 2;
+                    if (window.electronAPI && window.electronAPI.resizeWindow) {
+                        window.electronAPI.resizeWindow(w, h);
+                    }
+                }
+            };
+
+            const onMouseUp = () => {
+                if (!isResizing) return;
+                isResizing = false;
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+                const cmdTab = document.querySelector('.command-tab');
+                if (cmdTab) {
+                    const currentScale = parseFloat(cmdTab.style.zoom) || 1.0;
+                    localStorage.setItem('userBarScale', currentScale.toString());
+                }
+                this.resizeWindowToContent();
+            };
+
+            this.barResizeHandle.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                isResizing = true;
+                startX = e.screenX;
+                startY = e.screenY;
+                const cmdTab = document.querySelector('.command-tab');
+                const saved = parseFloat(localStorage.getItem('userBarScale') || '1.0');
+                startScale = (cmdTab && cmdTab.style.zoom) ? parseFloat(cmdTab.style.zoom) : (isNaN(saved) ? 1.0 : saved);
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            });
+        }
+
+        // Instant mouse leave listener for auto-hide and context menu
+        const mainBarTab = document.querySelector('.command-tab');
+        if (mainBarTab) {
+            mainBarTab.addEventListener('mouseleave', () => {
+                if (this.isAutoHideActive && window.electronAPI && window.electronAPI.checkAutoHide) {
+                    window.electronAPI.checkAutoHide();
+                }
+            });
+
+            // Right-click on command tab toggles shortcuts/help/quit popover
+            mainBarTab.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                if (this.shortcutsPopover) {
+                    this.toggleShortcutsPopover();
+                }
+            });
+
+            // Effortless Quitting: Double-click anywhere on the bar to quit immediately
+            mainBarTab.addEventListener('dblclick', (e) => {
+                if (e.target && (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT' || e.target.closest('select') || e.target.closest('input'))) {
+                    return;
+                }
+                e.preventDefault();
+                e.stopPropagation();
+                if (window.electronAPI && window.electronAPI.quitApp) {
+                    window.electronAPI.quitApp();
+                } else if (window.electronAPI && window.electronAPI.quit) {
+                    window.electronAPI.quit();
+                }
+            });
+        }
+
+        // Status dot double-click also quits instantly
+        if (this.aiStatusDot) {
+            this.aiStatusDot.addEventListener('dblclick', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (window.electronAPI && window.electronAPI.quitApp) {
+                    window.electronAPI.quitApp();
+                } else if (window.electronAPI && window.electronAPI.quit) {
+                    window.electronAPI.quit();
+                }
+            });
+        }
+
+        // Effortless Quitting: Keyboard shortcuts inside window (Escape, Cmd+Q, Ctrl+Q, Alt+Q)
+        window.addEventListener('keydown', (e) => {
+            const isQ = e.key && e.key.toLowerCase() === 'q';
+            const isQuitKey = e.key === 'Escape' || ((e.metaKey || e.ctrlKey || e.altKey) && isQ);
+            if (isQuitKey) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (window.electronAPI && window.electronAPI.quitApp) {
+                    window.electronAPI.quitApp();
+                } else if (window.electronAPI && window.electronAPI.quit) {
+                    window.electronAPI.quit();
+                }
+            }
+        });
+
+        // Quit Cluely button handler in shortcuts popover
+        const quitAppBtn = document.getElementById('quitAppBtn');
+        if (quitAppBtn) {
+            quitAppBtn.addEventListener('click', () => {
+                if (window.electronAPI && window.electronAPI.quitApp) {
+                    window.electronAPI.quitApp();
+                } else if (window.electronAPI && window.electronAPI.quit) {
+                    window.electronAPI.quit();
+                }
+            });
         }
 
         // Skill indicator click handler toggles DSA skill
@@ -542,8 +873,8 @@ class MainWindowUI {
             });
         }
 
-        // Add click handler for microphone
-        this.micButton.addEventListener('click', async () => {
+        // 9. Microphone click & hover-dwell handler
+        const toggleMicAction = async () => {
             if (this.isInteractive && this.speechAvailable) {
                 try {
                     if (this.isRecording) {
@@ -565,7 +896,11 @@ class MainWindowUI {
                 });
                 this.loadSpeechAvailability();
             }
-        });
+        };
+        this.micButton.addEventListener('click', toggleMicAction);
+        if (window.RubicHoverDwell) {
+            window.RubicHoverDwell.attach(this.micButton, toggleMicAction);
+        }
 
         // Language dropdown
         this.languageSelect = document.getElementById('codingLanguage');
@@ -711,6 +1046,43 @@ class MainWindowUI {
                     this.updateAutoHideToggleState();
                 }
             });
+
+            // Listen for Rubic Mode changes
+            if (window.electronAPI.onRubicModeChanged) {
+                window.electronAPI.onRubicModeChanged((event, data) => {
+                    if (data) this.applyRubicState(data);
+                });
+            }
+
+            // Listen for Rubic answer results
+            if (window.electronAPI.onRubicAnswer) {
+                window.electronAPI.onRubicAnswer((event, data) => {
+                    this.handleRubicAnswer(data);
+                });
+            }
+
+            // Listen for Rubic status updates (processing yellow glow/blink vs idle)
+            if (window.electronAPI.onRubicStatus) {
+                window.electronAPI.onRubicStatus((event, data) => {
+                    if (!data) return;
+                    if (data.state === 'processing') {
+                        if (this.rubicButton) {
+                            this.rubicButton.classList.add('rubic-processing');
+                            this.rubicButton.classList.remove('rubic-active');
+                        }
+                        if (this.rubicButtonLabel) {
+                            this.rubicButtonLabel.textContent = 'Thinking...';
+                        }
+                    } else if (data.state === 'idle') {
+                        if (this.rubicButton) {
+                            this.rubicButton.classList.remove('rubic-processing');
+                        }
+                        if (this.rubicButtonLabel) {
+                            this.rubicButtonLabel.textContent = 'Rubic';
+                        }
+                    }
+                });
+            }
 
             // Listen for Auto-Type events
             window.electronAPI.onAutotypeStarted((event, data) => {
@@ -1077,11 +1449,6 @@ class MainWindowUI {
             const oldText = skillSpan.textContent;
             skillSpan.textContent = skillName;
                         
-            const tooltip = this.isInteractive ? 
-                `${skillName} - Use ⌘↑/↓ to navigate skills` : 
-                `${skillName} - Enable interactive mode (Alt+A) to navigate`;
-            this.skillIndicator.title = tooltip;
-            
             // Add visual feedback for skill change
             this.animateSkillChange();
             
@@ -1471,7 +1838,7 @@ class MainWindowUI {
             padding: 8px 16px;
             color: rgba(255, 255, 255, 0.9);
             font-size: 13px;
-            cursor: pointer;
+            cursor: default !important;
             display: flex;
             align-items: center;
             gap: 8px;
@@ -1637,6 +2004,150 @@ class MainWindowUI {
             });
         } catch (e) {
             console.error('Failed to load clipboard history in popover', e);
+        }
+    }
+
+    // ── Rubic Mode Methods ──
+
+    async loadRubicState() {
+        try {
+            if (window.electronAPI && window.electronAPI.getRubicState) {
+                const state = await window.electronAPI.getRubicState();
+                if (state) this.applyRubicState(state);
+            }
+        } catch (e) {
+            logger.warn('Failed to load Rubic state', { error: e.message });
+        }
+    }
+
+    startAiStatusPolling() {
+        // Poll AI status every 5 seconds to update the dot
+        this.updateAiStatusDot();
+        this._aiStatusInterval = setInterval(() => this.updateAiStatusDot(), 5000);
+    }
+
+    async updateAiStatusDot() {
+        if (!this.aiStatusDot) return;
+        try {
+            if (window.electronAPI && window.electronAPI.getAiStatus) {
+                const status = await window.electronAPI.getAiStatus();
+                if (status && status.connected) {
+                    this.aiStatusDot.classList.remove('disconnected');
+                    this.aiStatusDot.classList.add('connected');
+                } else {
+                    this.aiStatusDot.classList.remove('connected');
+                    this.aiStatusDot.classList.add('disconnected');
+                }
+            }
+        } catch (_) {
+            // Silently fail — dot stays in current state
+        }
+    }
+
+    applyRubicState(state) {
+        this.rubicMode = !!state.rubicMode;
+        this.rubicSingleSelect = state.singleSelect !== false;
+        this.rubicCapsLockLED = !!state.capsLockLED;
+        this.rubicMenuBarSymbol = !!state.menuBarSymbol;
+        this.rubicHoverDwell = !!state.hoverDwell;
+
+        this.updateRubicUI();
+
+        // Resize to accommodate toggle buttons and answer box
+        setTimeout(() => this.resizeWindowToContent(), 50);
+    }
+
+    updateRubicUI() {
+        // Update Rubic button state
+        if (this.rubicButton) {
+            if (this.rubicMode) {
+                this.rubicButton.classList.add('rubic-active');
+            } else {
+                this.rubicButton.classList.remove('rubic-active');
+            }
+        }
+
+        // Sub-toggles stay always visible and directly clickable
+        if (this.rubicToggles) {
+            this.rubicToggles.style.display = 'inline-flex';
+        }
+
+        this.updateRubicToggles();
+    }
+
+    updateRubicToggles() {
+        // Single/Multi toggle (1 / M)
+        if (this.rubicSingleLabel) {
+            this.rubicSingleLabel.textContent = this.rubicSingleSelect ? '1' : 'M';
+        } else if (this.rubicToggleSingle) {
+            const lbl = this.rubicToggleSingle.querySelector('#rubicSingleLabel') || this.rubicToggleSingle;
+            lbl.textContent = this.rubicSingleSelect ? '1' : 'M';
+        }
+        if (this.rubicToggleSingle) {
+            if (this.rubicSingleSelect) {
+                this.rubicToggleSingle.classList.add('active');
+            } else {
+                this.rubicToggleSingle.classList.remove('active');
+            }
+        }
+
+        // Caps Lock LED toggle
+        if (this.rubicToggleLED) {
+            if (this.rubicCapsLockLED) {
+                this.rubicToggleLED.classList.add('active');
+            } else {
+                this.rubicToggleLED.classList.remove('active');
+            }
+        }
+
+        // Menu Bar Symbol toggle
+        if (this.rubicToggleMenuBar) {
+            if (this.rubicMenuBarSymbol) {
+                this.rubicToggleMenuBar.classList.add('active');
+            } else {
+                this.rubicToggleMenuBar.classList.remove('active');
+            }
+        }
+    }
+
+    handleRubicAnswer(data) {
+        if (!data) return;
+
+        // Reset processing state on the Rubic button
+        if (this.rubicButton) {
+            this.rubicButton.classList.remove('rubic-processing');
+            this.rubicButton.classList.remove('rubic-active');
+        }
+        if (this.rubicButtonLabel) {
+            this.rubicButtonLabel.textContent = 'Rubic';
+        }
+
+        if (data.success && data.answer) {
+            logger.info('Rubic answer received', { answer: data.answer });
+
+            // Display answer right next to the Rubic button
+            if (this.rubicAnswerVal) {
+                this.rubicAnswerVal.textContent = data.answer;
+            }
+            if (this.rubicAnswerBox) {
+                this.rubicAnswerBox.style.display = 'inline-flex';
+                this.rubicAnswerBox.classList.add('rubic-answer-flash');
+                setTimeout(() => {
+                    if (this.rubicAnswerBox) {
+                        this.rubicAnswerBox.classList.remove('rubic-answer-flash');
+                    }
+                }, 1500);
+            }
+
+            // Persist the answer permanently so it stays visible
+            try {
+                localStorage.setItem('rubicLastAnswer', data.answer);
+            } catch (_) {}
+
+            // Ensure window width fits the newly displayed answer box
+            this.resizeWindowToContent();
+        } else {
+            logger.warn('Rubic MCQ failed or returned no answer', { error: data.error });
         }
     }
 }

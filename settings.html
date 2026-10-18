@@ -464,10 +464,17 @@
                 <div class="settings-section-content">
                     <div class="settings-item">
                         <div>
-                            <div class="settings-item-label">Google API Key</div>
-                            <div class="settings-item-description">Your Google API key for Gemini models</div>
+                            <div class="settings-item-label">Google API Key (Primary)</div>
+                            <div class="settings-item-description">Primary Google API key for Gemini models</div>
                         </div>
                         <input type="password" class="input-field" id="geminiKey" placeholder="Enter your Google API key">
+                    </div>
+                    <div class="settings-item">
+                        <div>
+                            <div class="settings-item-label">Google API Key (Backup / Secondary)</div>
+                            <div class="settings-item-description">Automatic failover if primary key hits quota or rate limits</div>
+                        </div>
+                        <input type="password" class="input-field" id="geminiKeySecondary" placeholder="Enter secondary backup API key">
                     </div>
                 </div>
             </div>

@@ -11,9 +11,9 @@ class ConfigManager {
   loadConfiguration() {
     this.config = {
       app: {
-        name: 'OpenCluely',
+        name: 'Settings',
         version: '1.0.0',
-        processTitle: 'OpenCluely',
+        processTitle: 'Settings',
         dataDir: this.appDataDir,
         isDevelopment: this.env === 'development',
         isProduction: this.env === 'production'
@@ -118,7 +118,17 @@ class ConfigManager {
 
   getApiKey(service) {
     const envKey = `${service.toUpperCase()}_API_KEY`;
-    return process.env[envKey];
+    return process.env[envKey] || process.env[`${service.toUpperCase()}_API_KEY_SECONDARY`];
+  }
+
+  getApiKeys(service) {
+    const s = service.toUpperCase();
+    const primary = (process.env[`${s}_API_KEY`] || '').trim();
+    const secondary = (process.env[`${s}_API_KEY_SECONDARY`] || process.env[`${s}_API_KEY_2`] || process.env[`${s}_API_KEY_BACKUP`] || '').trim();
+    const keys = [];
+    if (primary) keys.push(primary);
+    if (secondary && secondary !== primary) keys.push(secondary);
+    return keys;
   }
 
   isFeatureEnabled(feature) {

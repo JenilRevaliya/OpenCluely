@@ -33,25 +33,34 @@ class LLMService {
   }
 
   initializeClient() {
-    const apiKey = config.getApiKey('GEMINI');
+    const apiKeys = config.getApiKeys('GEMINI');
+    const primaryKey = apiKeys[0];
+    const secondaryKey = apiKeys[1];
     
-    if (!apiKey || apiKey === 'your-api-key-here') {
+    if (!primaryKey || primaryKey === 'your-api-key-here' || primaryKey === 'your_gemini_api_key_here') {
       logger.warn('Gemini API key not configured', { 
-        keyExists: !!apiKey,
-        isPlaceholder: apiKey === 'your-api-key-here'
+        keyExists: !!primaryKey,
+        isPlaceholder: primaryKey === 'your-api-key-here'
       });
       return;
     }
 
     try {
-      this.client = new GoogleGenAI({ apiKey });
+      this.client = new GoogleGenAI({ apiKey: primaryKey });
+      if (secondaryKey) {
+        this.secondaryClient = new GoogleGenAI({ apiKey: secondaryKey });
+        logger.info('Gemini secondary failover AI client initialized');
+      } else {
+        this.secondaryClient = null;
+      }
       
       // Use the configured model name (default: gemini-3.5-flash)
       this.model = config.get('llm.gemini.model');
       this.isInitialized = true;
       
       logger.info('Gemini AI client initialized successfully', {
-        model: this.model
+        model: this.model,
+        hasSecondaryBackup: !!this.secondaryClient
       });
     } catch (error) {
       logger.error('Failed to initialize Gemini client', { 
@@ -239,6 +248,69 @@ class LLMService {
       if (config.get('llm.gemini.fallbackEnabled')) {
         return this.generateFallbackResponse('[image]', activeSkill);
       }
+      throw error;
+    }
+  }
+
+  /**
+   * Process an image with a raw custom prompt — used by Rubic MCQ mode.
+   * No skill context, no session memory. Just image + prompt → text answer.
+   * @param {Buffer} imageBuffer
+   * @param {string} mimeType
+   * @param {string} prompt - The custom instruction text
+   * @returns {Promise<{response: string, metadata: object}>}
+   */
+  async processImageDirect(imageBuffer, mimeType, prompt) {
+    if (!this.isInitialized) {
+      throw new Error('LLM service not initialized. Check Gemini API key configuration.');
+    }
+    if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) {
+      throw new Error('Invalid image buffer provided to processImageDirect');
+    }
+
+    const startTime = Date.now();
+    this.requestCount++;
+
+    try {
+      const base64 = imageBuffer.toString('base64');
+
+      const request = {
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: prompt },
+              { inlineData: { data: base64, mimeType } }
+            ]
+          }
+        ]
+      };
+
+      this.applyGenerationDefaults(request, {
+        temperature: 0.1, // Very low temp for deterministic answer extraction
+        maxOutputTokens: 64, // We only need a letter or two
+      });
+
+      let responseText;
+      try {
+        // Try native HTTPS request first for instantaneous response without undici socket issues
+        responseText = await this.executeAlternativeRequest(request);
+      } catch (error) {
+        logger.warn('Alternative method failed for processImageDirect, trying primary', { error: error.message });
+        responseText = await this.executeRequest(request);
+      }
+
+      return {
+        response: responseText,
+        metadata: {
+          processingTime: Date.now() - startTime,
+          requestId: this.requestCount,
+          isRubicMCQ: true,
+        }
+      };
+    } catch (error) {
+      this.errorCount++;
+      logger.error('processImageDirect failed', { error: error.message });
       throw error;
     }
   }
@@ -1576,38 +1648,65 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
   }
 
   async executeAlternativeRequest(geminiRequest) {
-    const https = require('https');
-    const apiKey = config.getApiKey('GEMINI');
+    const apiKeys = config.getApiKeys('GEMINI');
     const primaryModel = config.get('llm.gemini.model');
     const fallbackModels = config.get('llm.gemini.fallbackModels') || [];
     const modelsToTry = [primaryModel, ...fallbackModels];
 
-    logger.info('Using alternative HTTPS request method', { modelsToTry });
+    logger.info('Using alternative HTTPS request method with failover', {
+      modelsToTry,
+      configuredKeysCount: apiKeys.length
+    });
 
     let lastError = null;
 
-    for (const modelName of modelsToTry) {
-      try {
-        const result = await this._executeAlternativeRequestForModel(geminiRequest, modelName, apiKey);
-        return result;
-      } catch (error) {
-        lastError = error;
-        logger.warn(`Alternative HTTPS request failed for model ${modelName}`, {
-          error: error.message,
-          model: modelName
-        });
+    for (let keyIndex = 0; keyIndex < apiKeys.length; keyIndex++) {
+      const apiKey = apiKeys[keyIndex];
+      const isBackupKey = keyIndex > 0;
 
-        const isModelUnavailable = error.message.includes('503') ||
-          error.message.includes('UNAVAILABLE') ||
-          error.message.includes('high demand');
+      if (isBackupKey) {
+        logger.info(`Failing over to secondary backup Gemini API key (Key #${keyIndex + 1})...`);
+      }
 
-        if (!isModelUnavailable && modelName === primaryModel) {
-          break;
+      for (const modelName of modelsToTry) {
+        try {
+          const result = await this._executeAlternativeRequestForModel(geminiRequest, modelName, apiKey);
+          if (isBackupKey) {
+            logger.info('Successfully completed AI request using secondary backup API key!');
+          }
+          return result;
+        } catch (error) {
+          lastError = error;
+          logger.warn(`Alternative HTTPS request failed (Key #${keyIndex + 1}, model ${modelName})`, {
+            error: error.message,
+            model: modelName
+          });
+
+          const isQuotaOrAuth = error.message.includes('429') ||
+            error.message.includes('RESOURCE_EXHAUSTED') ||
+            error.message.includes('quota') ||
+            error.message.includes('rate limit') ||
+            error.message.includes('403') ||
+            error.message.includes('API_KEY_INVALID');
+
+          // If current key has quota/rate-limit/auth issue and we have another key available, switch to next key immediately!
+          if (isQuotaOrAuth && keyIndex + 1 < apiKeys.length) {
+            logger.warn(`Key #${keyIndex + 1} hit quota or auth limits; switching immediately to next available backup API key.`);
+            break;
+          }
+
+          const isModelUnavailable = error.message.includes('503') ||
+            error.message.includes('UNAVAILABLE') ||
+            error.message.includes('high demand');
+
+          if (!isModelUnavailable && !isQuotaOrAuth && modelName === primaryModel) {
+            break;
+          }
         }
       }
     }
 
-    throw lastError || new Error('Alternative HTTPS request failed for all models');
+    throw lastError || new Error('Alternative HTTPS request failed for all available API keys and models');
   }
 
   async _executeAlternativeRequestForModel(geminiRequest, modelName, apiKey) {
@@ -1691,6 +1790,63 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
         reject(new Error('Alternative request timeout'));
       });
       
+      req.write(postData);
+      req.end();
+    });
+  }
+
+  async executeLocalOfflineRequest(prompt, imageBase64) {
+    const http = require('http');
+    const localUrl = process.env.LOCAL_LLM_URL || 'http://127.0.0.1:11434';
+    const localModel = process.env.LOCAL_LLM_MODEL || 'llama3.2-vision';
+
+    logger.info('Attempting local offline AI model request', { localUrl, localModel });
+
+    const postData = JSON.stringify({
+      model: localModel,
+      prompt: prompt,
+      images: imageBase64 ? [imageBase64] : [],
+      stream: false,
+      options: {
+        temperature: 0.1
+      }
+    });
+
+    const parsed = new URL(localUrl.replace(/\/$/, '') + '/api/generate');
+    const options = {
+      hostname: parsed.hostname,
+      port: parsed.port || 11434,
+      path: parsed.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      },
+      timeout: 15000
+    };
+
+    return new Promise((resolve, reject) => {
+      const req = http.request(options, (res) => {
+        let data = '';
+        res.on('data', chunk => { data += chunk; });
+        res.on('end', () => {
+          try {
+            if (res.statusCode !== 200) {
+              reject(new Error(`Local LLM HTTP ${res.statusCode}: ${data}`));
+              return;
+            }
+            const json = JSON.parse(data);
+            resolve(json.response || '');
+          } catch (e) {
+            reject(e);
+          }
+        });
+      });
+      req.on('error', reject);
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Local LLM request timeout'));
+      });
       req.write(postData);
       req.end();
     });

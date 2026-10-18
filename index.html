@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>OpenCluely</title>
+    <title>Settings</title>
     <link href="./dist/output.css" rel="stylesheet" />
     <link href="./src/styles/common.css" rel="stylesheet" />
     <style>
@@ -424,7 +424,7 @@
         padding: 2px 8px;
         border-radius: 4px;
         font-size: 10px;
-        cursor: pointer;
+        cursor: default !important;
         transition: background 0.2s;
       }
       .clipboard-copy-all-btn:hover {
@@ -459,7 +459,7 @@
         padding: 2px 6px;
         border-radius: 4px;
         font-size: 10px;
-        cursor: pointer;
+        cursor: default !important;
         transition: all 0.2s;
       }
       .clipboard-copy-btn:hover {
@@ -573,72 +573,384 @@
         box-shadow: 0 0 3px rgba(0,0,0,0.3);
       }
 
-      .opacity-control input[type="range"]::-webkit-slider-thumb:hover {
-        background: rgba(255, 255, 255, 1);
-        box-shadow: 0 0 6px rgba(255,255,255,0.4);
+      /* Bottom-right corner resize handle */
+      .bar-resize-handle {
+        width: 14px;
+        height: 100%;
+        margin-left: 2px;
+        margin-right: -6px;
+        display: flex;
+        align-items: flex-end;
+        justify-content: flex-end;
+        padding-bottom: 2px;
+        padding-right: 2px;
+        box-sizing: border-box;
+        opacity: 0.45;
+        transition: opacity 0.2s ease;
+        -webkit-app-region: no-drag;
+        cursor: default !important; /* STRICT: cursor symbol must NEVER change */
+        flex-shrink: 0;
+        user-select: none;
+      }
+
+      .bar-resize-handle:hover {
+        opacity: 0.95;
+      }
+
+      .bar-resize-handle::after {
+        content: '';
+        width: 6px;
+        height: 6px;
+        border-right: 2px solid rgba(255, 255, 255, 0.7);
+        border-bottom: 2px solid rgba(255, 255, 255, 0.7);
+        border-bottom-right-radius: 2px;
+        display: block;
+        cursor: default !important;
+      }
+
+      /* Minimal MCQ Mode vs Expanded Mode */
+      .extended-tools-group {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        flex-shrink: 0;
+        transition: opacity 0.2s ease;
+      }
+
+      .command-tab.is-minimal .extended-tools-group {
+        display: none !important;
+      }
+
+      .expand-bar-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4px 6px;
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.7);
+        border-radius: 6px;
+        cursor: default !important;
+        margin-left: 2px;
+        flex-shrink: 0;
+        -webkit-app-region: no-drag;
+        transition: all 0.2s ease;
+      }
+
+      .expand-bar-btn * {
+        cursor: default !important;
+      }
+
+      .expand-bar-btn:hover {
+        background: rgba(255, 255, 255, 0.15);
+        color: #38bdf8;
+      }
+
+      .expand-bar-btn.is-expanded {
+        color: #38bdf8;
+        background: rgba(56, 189, 248, 0.2);
+      }
+
+      /* ── Universal Hover Dwell Ring ── */
+      .rubic-dwell-ring {
+        position: absolute;
+        inset: -2px;
+        pointer-events: none;
+        z-index: 25;
+        border-radius: 7px;
+        overflow: hidden;
+      }
+
+      .rubic-dwell-svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      .rubic-dwell-bg {
+        fill: none;
+        stroke: rgba(255, 255, 255, 0.12);
+        stroke-width: 2.2;
+      }
+
+      .rubic-dwell-progress {
+        fill: none;
+        stroke: #22d3ee;
+        stroke-width: 2.5;
+        stroke-linecap: round;
+        stroke-dasharray: 100;
+        stroke-dashoffset: 100;
+        transition: stroke-dashoffset 0.04s linear;
+      }
+
+      .rubic-dwell-fired {
+        animation: rubic-flash 0.4s ease;
+      }
+
+      @keyframes rubic-flash {
+        0% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.7); }
+        50% { box-shadow: 0 0 16px 4px rgba(34, 211, 238, 0.5); }
+        100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0); }
+      }
+
+      /* ── Rubic Mode Button ── */
+      .command-item.rubic-active {
+        color: #22d3ee !important;
+        background: rgba(34, 211, 238, 0.2);
+        box-shadow: 0 0 10px rgba(34, 211, 238, 0.35);
+        border: 1px solid rgba(34, 211, 238, 0.4);
+      }
+
+      .command-item.rubic-active span {
+        color: #cffafe !important;
+        font-weight: 700 !important;
+      }
+
+      .command-item.rubic-active i {
+        color: #22d3ee !important;
+        text-shadow: 0 0 8px rgba(34, 211, 238, 0.8);
+      }
+
+      /* ── Rubic Processing State (Yellow Glowing & Blinking) ── */
+      .command-item.rubic-processing {
+        color: #facc15 !important;
+        background: rgba(234, 179, 8, 0.22) !important;
+        border: 1px solid rgba(250, 204, 21, 0.75) !important;
+        box-shadow: 0 0 14px rgba(250, 204, 21, 0.6) !important;
+        animation: rubic-yellow-blink 0.7s infinite alternate !important;
+      }
+
+      .command-item.rubic-processing i {
+        color: #fde047 !important;
+        text-shadow: 0 0 10px rgba(250, 204, 21, 0.9);
+        animation: rubic-spin 1.2s linear infinite;
+      }
+
+      .command-item.rubic-processing span {
+        color: #fef08a !important;
+        font-weight: 800 !important;
+      }
+
+      @keyframes rubic-yellow-blink {
+        0% {
+          background: rgba(234, 179, 8, 0.15);
+          box-shadow: 0 0 6px rgba(250, 204, 21, 0.4);
+        }
+        100% {
+          background: rgba(234, 179, 8, 0.4);
+          box-shadow: 0 0 18px rgba(250, 204, 21, 0.85);
+        }
+      }
+
+      @keyframes rubic-spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+
+      /* Rubic answer flash on the button */
+      .rubic-answer-flash {
+        animation: rubic-answer-pulse 1.5s ease;
+      }
+
+      @keyframes rubic-answer-pulse {
+        0% { background: rgba(34, 211, 238, 0.2); }
+        30% { background: rgba(34, 211, 238, 0.6); }
+        100% { background: rgba(34, 211, 238, 0.2); }
+      }
+
+      /* AI Status Dot */
+      .ai-status-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        transition: background-color 0.3s ease, box-shadow 0.3s ease;
+      }
+
+      .ai-status-dot.connected {
+        background-color: #22c55e;
+        box-shadow: 0 0 6px rgba(34, 197, 94, 0.6);
+      }
+
+      .ai-status-dot.disconnected {
+        background-color: #ef4444;
+        box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
+      }
+
+      /* Stored Answer Box directly next to Rubic button */
+      .rubic-answer-box {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 2px 8px;
+        border-radius: 6px;
+        background: rgba(34, 211, 238, 0.18);
+        border: 1px solid rgba(34, 211, 238, 0.6);
+        box-shadow: 0 0 10px rgba(34, 211, 238, 0.35);
+        cursor: default;
+        -webkit-app-region: no-drag;
+        transition: all 0.2s ease;
+        flex-shrink: 0;
+      }
+
+      .rubic-answer-box .ans-label {
+        font-size: 10px;
+        font-weight: 700;
+        color: rgba(255, 255, 255, 0.7);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .rubic-answer-box .ans-val {
+        font-size: 13px;
+        font-weight: 900;
+        color: #22d3ee;
+        letter-spacing: 1px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+
+      /* Rubic sub-toggles (Always visible and clickable) */
+      .rubic-toggles {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        -webkit-app-region: no-drag;
+        flex-shrink: 0;
+      }
+
+      .rubic-mini-toggle {
+        min-width: 22px;
+        height: 22px;
+        padding: 0 4px;
+        border-radius: 5px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        font-weight: 700;
+        color: rgba(255, 255, 255, 0.85);
+        cursor: default !important;
+        transition: all 0.2s ease;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        background: rgba(255, 255, 255, 0.08);
+        -webkit-app-region: no-drag;
+        box-sizing: border-box;
+      }
+
+      .rubic-mini-toggle * {
+        pointer-events: none;
+      }
+
+      .rubic-mini-toggle:hover {
+        background: rgba(255, 255, 255, 0.22);
+        color: #ffffff;
+        border-color: rgba(255, 255, 255, 0.5);
+      }
+
+      .rubic-mini-toggle.active {
+        color: #22d3ee !important;
+        border-color: rgba(34, 211, 238, 0.7) !important;
+        background: rgba(34, 211, 238, 0.25) !important;
+        box-shadow: 0 0 8px rgba(34, 211, 238, 0.45);
+      }
+
+      .rubic-mini-toggle.active i {
+        color: #22d3ee !important;
+        text-shadow: 0 0 6px rgba(34, 211, 238, 0.8);
       }
     </style>
   </head>
   <body>
-    <div class="command-tab">
-      <div class="command-item" id="screenshotButton" title="Capture Screenshot (⌘⇧S)">
+    <div class="command-tab is-minimal">
+      <div class="command-item" id="screenshotButton">
         <i class="fas fa-camera"></i>
         <span>⌘⇧S</span>
       </div>
       <div class="command-separator"></div>
-      <div class="command-item" id="mcqToggle" title="Toggle MCQ-Only Mode (⌥M / Alt+M)">
+      <div class="command-item" id="mcqToggle">
         <i class="fas fa-list-check"></i>
         <span>MCQ</span>
       </div>
       <div class="command-separator"></div>
-      <div class="command-item" id="autoHideToggle" title="Toggle Auto-Hide on Mouse Leave (⌥H / Alt+H)">
-        <i class="fas fa-ghost"></i>
-        <span>Hide</span>
+      <!-- Rubic Universal MCQ Button -->
+      <div class="command-item" id="rubicButton" style="position: relative;">
+        <div class="ai-status-dot disconnected" id="aiStatusDot"></div>
+        <i class="fas fa-cube"></i>
+        <span id="rubicButtonLabel">Rubic</span>
       </div>
-      <div class="command-separator"></div>
-      <div class="command-item" id="autoTypeButton" title="Smart Auto-Type Clipboard (90-120 WPM) (⌥V / Alt+V)">
-        <i class="fas fa-keyboard"></i>
-        <span id="autoTypeLabel">Type ⌥V</span>
-        <div class="autotype-progress-track" id="autoTypeProgressTrack">
-          <div class="autotype-progress-fill" id="autoTypeProgressFill"></div>
+      <!-- Stored Answer Box (right next to Rubic button) -->
+      <div class="rubic-answer-box" id="rubicAnswerBox" style="display: none;">
+        <span class="ans-label">Ans:</span>
+        <span class="ans-val" id="rubicAnswerVal">-</span>
+      </div>
+      <!-- Rubic sub-toggles (Always visible and clickable) -->
+      <div class="rubic-toggles" id="rubicToggles">
+        <div class="rubic-mini-toggle active" id="rubicToggleSingle">
+          <span id="rubicSingleLabel">1</span>
+        </div>
+        <div class="rubic-mini-toggle" id="rubicToggleLED">
+          <i class="fas fa-lightbulb" style="font-size: 10px;"></i>
+        </div>
+        <div class="rubic-mini-toggle active" id="rubicToggleMenuBar">
+          <i class="fas fa-signal" style="font-size: 10px;"></i>
         </div>
       </div>
       <div class="command-separator"></div>
-      <div class="command-item" id="micButton" title="Toggle Speech (⌥R / Alt+R)">
-        <i class="fas fa-microphone"></i>
+      <div class="command-item" id="autoHideToggle">
+        <i class="fas fa-ghost"></i>
+        <span>Hide</span>
       </div>
-      <div class="command-separator"></div>
-      <div class="command-item" id="skillIndicator" title="Active Skill">
-        <i class="fas fa-brain"></i>
-        <span>DSA</span>
+      <!-- Extended / Wide options (Shown only when expanded) -->
+      <div class="extended-tools-group" id="extendedToolsGroup">
+        <div class="command-separator"></div>
+        <div class="command-item" id="autoTypeButton">
+          <i class="fas fa-keyboard"></i>
+          <span id="autoTypeLabel">Type ⌥V</span>
+          <div class="autotype-progress-track" id="autoTypeProgressTrack">
+            <div class="autotype-progress-fill" id="autoTypeProgressFill"></div>
+          </div>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item" id="micButton">
+          <i class="fas fa-microphone"></i>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item" id="skillIndicator">
+          <i class="fas fa-brain"></i>
+          <span>DSA</span>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item" id="languageSelector">
+          <i class="fas fa-code"></i>
+          <select id="codingLanguage">
+            <option value="cpp">C++</option>
+            <option value="c">C</option>
+            <option value="python">Python</option>
+            <option value="java">Java</option>
+            <option value="javascript">JavaScript</option>
+          </select>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item" id="targetModeBtn">
+          <i class="fas fa-crosshairs"></i>
+        </div>
+        <div class="command-item" id="clipboardHistoryBtn">
+          <i class="fas fa-clipboard-list"></i>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item" id="infoButton">
+          <i class="fas fa-circle-info"></i>
+        </div>
+        <div class="command-separator"></div>
+        <div class="opacity-control" id="opacityControl">
+          <i class="fas fa-eye-low-vision"></i>
+          <input type="range" id="opacitySlider" min="0" max="100" value="38" step="1" />
+        </div>
       </div>
-      <div class="command-separator"></div>
-      <div class="command-item" id="languageSelector" title="Target Language">
-        <i class="fas fa-code"></i>
-        <select id="codingLanguage">
-          <option value="cpp">C++</option>
-          <option value="c">C</option>
-          <option value="python">Python</option>
-          <option value="java">Java</option>
-          <option value="javascript">JavaScript</option>
-        </select>
+      <!-- Expand / Collapse button (Click or Hover 3s) at bottom-right corner -->
+      <div class="command-item expand-bar-btn" id="expandBarBtn" style="position: relative;">
+        <i class="fas fa-chevron-right" id="expandBarIcon"></i>
       </div>
-      <div class="command-separator"></div>
-      <div class="command-item" id="targetModeBtn" title="Target Box Mode (Smart Bounding Box)">
-        <i class="fas fa-crosshairs"></i>
-      </div>
-      <div class="command-item" id="clipboardHistoryBtn" title="Clipboard History">
-        <i class="fas fa-clipboard-list"></i>
-      </div>
-      <div class="command-separator"></div>
-      <div class="command-item" id="infoButton" title="Shortcuts">
-        <i class="fas fa-circle-info"></i>
-      </div>
-      <div class="command-separator"></div>
-      <div class="opacity-control" id="opacityControl" title="Bar Transparency">
-        <i class="fas fa-eye-low-vision"></i>
-        <input type="range" id="opacitySlider" min="0" max="100" value="38" step="1" />
-      </div>
+      <div class="bar-resize-handle" id="barResizeHandle"></div>
     </div>
 
   <!-- Shortcuts Popover (hidden by default via CSS) -->
@@ -758,11 +1070,24 @@
             </td>
             <td>Open settings</td>
           </tr>
+          <tr>
+            <td>
+              <span class="kbd">Alt</span>
+              + <span class="kbd">Q</span>
+              <span style="opacity:.7; margin:0 4px;">or</span>
+              <span class="kbd">⌘</span>
+              + <span class="kbd">⌥</span>
+              + <span class="kbd">Q</span>
+            </td>
+            <td><strong>Quit OpenCluely</strong></td>
+          </tr>
         </tbody>
       </table>
-      <div class="shortcuts-footer">
-        <span>Tip: Alt+A also toggles interaction from anywhere.</span>
-        <a href="https://techycsr.dev" target="_blank" rel="noreferrer noopener">Made by @TechyCSR</a>
+      <div class="shortcuts-footer" style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 10px;">
+        <button id="quitAppBtn" class="quit-cluely-btn" style="background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.45); color: #fca5a5; border-radius: 4px; padding: 4px 10px; font-size: 11px; font-weight: 600; cursor: default !important; display: inline-flex; align-items: center; gap: 6px;">
+          <i class="fas fa-power-off"></i> Quit Cluely (⌥Q)
+        </button>
+        <span style="font-size: 10px; opacity: 0.6;">Right-click bar to open</span>
       </div>
     </div>
 
@@ -770,7 +1095,7 @@
     <div id="clipboardPopover" class="shortcuts-popover clipboard-popover">
       <div class="shortcuts-title" style="justify-content: space-between;">
         <span><i class="fas fa-clipboard-list"></i> Clipboard History</span>
-        <i class="fas fa-times" id="closeClipboardPopoverBtn" style="cursor: pointer; opacity: 0.6;"></i>
+        <i class="fas fa-times" id="closeClipboardPopoverBtn" style="cursor: default !important; opacity: 0.6;"></i>
       </div>
       <div id="clipboardPopoverContent">
         <div style="text-align: center; color: rgba(255,255,255,0.5); padding: 20px 0; font-size: 11px;">
@@ -779,6 +1104,7 @@
       </div>
     </div>
 
+    <script src="./src/ui/hover-dwell.js"></script>
     <script src="./src/ui/main-window.js"></script>
   </body>
 </html>
