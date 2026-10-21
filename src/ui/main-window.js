@@ -736,7 +736,7 @@ class MainWindowUI {
         const triggerAutoTypeAction = async () => {
             if (window.electronAPI && window.electronAPI.typeClipboard) {
                 try {
-                    await window.electronAPI.typeClipboard();
+                    await window.electronAPI.typeClipboard({ startDelay: 0.6 });
                 } catch (e) {
                     logger.error('Failed to trigger auto-type', e);
                 }

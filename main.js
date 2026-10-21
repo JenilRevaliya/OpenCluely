@@ -1369,6 +1369,11 @@ class ApplicationController {
       return { success: false, stopped: true };
     }
     logger.info("Auto-type triggered for clipboard content");
+    try {
+      const { BrowserWindow } = require('electron');
+      const focusedWin = BrowserWindow.getFocusedWindow();
+      if (focusedWin) focusedWin.blur();
+    } catch (_) {}
     return autoTypeService.typeClipboard(options);
   }
 

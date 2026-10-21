@@ -3,970 +3,881 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Interview Co-Pilot</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+    <title>AI Response</title>
+    <script src="lib/markdown.js"></script>
+    <script src="lib/mathrender.js"></script>
     <style>
         :root {
-            --bg: rgba(8, 11, 19, 0.96);
-            --border: rgba(255, 255, 255, 0.08);
-            --border-subtle: rgba(255, 255, 255, 0.04);
-            --accent: #22d3ee;
-            --accent-glow: rgba(34, 211, 238, 0.35);
-            --green: #22c55e;
-            --text: #f8fafc;
-            --text-secondary: #cbd5e1;
-            --muted: rgba(241, 245, 249, 0.50);
-            --card-bg: rgba(255, 255, 255, 0.025);
-            --card-border: rgba(255, 255, 255, 0.06);
+            --bg-glass: rgba(10, 14, 23, 0.78);
+            --border-glass: rgba(255, 255, 255, 0.14);
+            --accent-cyan: #38bdf8;
+            --accent-green: #22c55e;
+            --text-primary: rgba(255, 255, 255, 0.95);
+            --text-secondary: rgba(255, 255, 255, 0.70);
+            --text-muted: rgba(255, 255, 255, 0.50);
+            --code-bg: rgba(0, 0, 0, 0.45);
         }
+
         *, *::before, *::after {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
-            scrollbar-width: none;
-            -ms-overflow-style: none;
         }
-        ::-webkit-scrollbar { display: none; }
 
-        html, body {
-            width: 100vw;
-            height: 100vh;
-            overflow: hidden;
-            background: var(--bg);
-            backdrop-filter: blur(28px) saturate(180%);
-            -webkit-backdrop-filter: blur(28px) saturate(180%);
-            color: var(--text);
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            font-size: 12px;
-            line-height: 1.5;
-            letter-spacing: 0.08px;
-            -webkit-font-smoothing: antialiased;
+        body {
+            background: linear-gradient(135deg, rgba(8, 12, 20, 0.75) 0%, rgba(15, 23, 42, 0.85) 100%);
+            backdrop-filter: blur(24px) saturate(160%);
+            -webkit-backdrop-filter: blur(24px) saturate(160%);
             border-radius: 10px;
-            border: 1px solid var(--border);
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border-glass);
             -webkit-app-region: no-drag;
-            display: flex;
-            flex-direction: column;
+            color: var(--text-primary);
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif;
+            font-size: 13px;
+            line-height: 1.55;
+            letter-spacing: 0.1px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.1);
             user-select: text;
         }
 
-        /* ── Top Stealth Control Bar ── */
-        #header {
+        /* ── Draggable Header ── */
+        .window-header {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 32px;
+            -webkit-app-region: drag;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            height: 28px;
-            padding: 0 10px;
+            padding: 0 12px;
             background: rgba(0, 0, 0, 0.40);
-            border-bottom: 1px solid var(--border);
-            -webkit-app-region: drag;
-            flex-shrink: 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+            z-index: 50;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.4px;
         }
-        .hl, .hr {
+
+        .window-title {
+            pointer-events: none;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .window-title .title-badge {
+            background: rgba(56, 189, 248, 0.15);
+            border: 1px solid rgba(56, 189, 248, 0.4);
+            color: #38bdf8;
+            font-size: 9.5px;
+            font-weight: 700;
+            padding: 1px 5px;
+            border-radius: 3px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .window-controls {
             display: flex;
             align-items: center;
             gap: 6px;
             -webkit-app-region: no-drag;
         }
-        #mic-dot {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: #334155;
-            transition: background 0.25s, box-shadow 0.25s;
-            flex-shrink: 0;
-        }
-        #mic-dot.on {
-            background: var(--green);
-            box-shadow: 0 0 8px var(--green);
-        }
-        #mic-dot.hear {
-            background: var(--green);
-            box-shadow: 0 0 12px var(--green);
-            animation: pdot 0.8s infinite ease-in-out;
-        }
-        @keyframes pdot {
-            0%, 100% { transform: scale(1); opacity: 0.9; }
-            50% { transform: scale(1.45); opacity: 1; }
-        }
-        #status-label {
-            font-size: 9.5px;
-            font-weight: 700;
-            letter-spacing: 0.6px;
-            text-transform: uppercase;
-            color: var(--muted);
-        }
-        .nav-btn {
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid rgba(255, 255, 255, 0.09);
-            color: var(--muted);
+
+        .window-btn {
+            width: 20px;
+            height: 20px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             border-radius: 4px;
-            width: 22px;
-            height: 18px;
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-secondary);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            cursor: pointer;
+            transition: all 0.15s ease;
+            font-size: 13px;
+            font-weight: 600;
+            line-height: 1;
+        }
+
+        .window-btn:hover {
+            background: rgba(255, 255, 255, 0.18);
+            color: #fff;
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+
+        .window-btn-close:hover {
+            background: rgba(239, 68, 68, 0.35);
+            border-color: rgba(239, 68, 68, 0.6);
+            color: #fff;
+        }
+
+        /* ── Main Container ── */
+        .main-container {
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            position: relative;
+            background: transparent;
+        }
+
+        .has-header #response-content,
+        .has-header #loading {
+            margin-top: 32px;
+            height: calc(100vh - 32px);
+        }
+
+        /* ── Loading State ── */
+        .loading {
             display: flex;
             align-items: center;
             justify-content: center;
-            cursor: pointer;
-            font-size: 11px;
-            font-weight: 600;
-            transition: all 0.15s;
+            background: rgba(0, 0, 0, 0.2);
         }
-        .nav-btn:hover:not(:disabled) {
-            background: rgba(34, 211, 238, 0.18);
-            border-color: rgba(34, 211, 238, 0.35);
-            color: var(--accent);
-        }
-        .nav-btn:disabled {
-            opacity: 0.25;
-            cursor: default;
-        }
-        #q-counter {
-            font-size: 10px;
-            font-weight: 700;
-            color: var(--accent);
-            padding: 1.5px 8px;
-            background: rgba(34, 211, 238, 0.10);
-            border: 1px solid rgba(34, 211, 238, 0.24);
-            border-radius: 10px;
-            letter-spacing: 0.2px;
-        }
-        .icon-btn {
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            color: var(--muted);
-            border-radius: 4px;
-            height: 18px;
-            padding: 0 6px;
-            font-size: 10px;
-            cursor: pointer;
+
+        .loading-compact {
             display: flex;
             align-items: center;
-            transition: all 0.15s;
-        }
-        .icon-btn:hover {
-            background: rgba(255, 255, 255, 0.12);
-            color: var(--text);
-        }
-        #close-btn:hover {
-            background: rgba(239, 68, 68, 0.25);
-            border-color: rgba(239, 68, 68, 0.45);
-            color: #fca5a5;
+            justify-content: center;
+            gap: 10px;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 8px 18px;
+            border-radius: 20px;
         }
 
-        /* ── Live Hearing Strip ── */
-        #hearing-strip {
-            display: none;
+        .loading-text {
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .dots-container {
+            display: inline-flex;
             align-items: center;
-            gap: 7px;
-            padding: 3.5px 12px;
-            background: rgba(34, 197, 94, 0.10);
-            border-bottom: 1px solid rgba(34, 197, 94, 0.25);
-            font-size: 11px;
-            color: #86efac;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            flex-shrink: 0;
-            animation: fadein 0.15s ease;
-        }
-        #hearing-strip.show { display: flex; }
-        #hearing-text {
-            overflow: hidden;
-            text-overflow: ellipsis;
-            font-style: italic;
-        }
-        @keyframes fadein {
-            from { opacity: 0; transform: translateY(-2px); }
-            to { opacity: 1; transform: translateY(0); }
+            gap: 4px;
         }
 
-        /* ── Scrollport & Main Content ── */
-        #scroll-wrap {
-            flex: 1;
-            overflow-y: auto;
-            overflow-x: hidden;
-        }
-        #answer-body {
-            padding: 8px 12px 10px;
-        }
-
-        /* ── Thinking / Analyzing State ── */
-        #thinking-msg {
-            display: none;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 12px;
-            margin-bottom: 6px;
-            border-radius: 6px;
-            background: rgba(34, 211, 238, 0.06);
-            border: 1px solid rgba(34, 211, 238, 0.18);
-            font-size: 11.5px;
-            color: #94a3b8;
-            font-weight: 500;
-        }
-        #thinking-msg.show { display: flex; }
-        .dblink {
-            width: 5px;
-            height: 5px;
+        .bouncing-dot {
+            width: 6px;
+            height: 6px;
             border-radius: 50%;
-            background: var(--accent);
-            animation: bounce 1.1s infinite ease-in-out;
+            background-color: var(--accent-cyan);
+            animation: bounce 1.3s infinite ease-in-out;
         }
-        .dblink:nth-child(2) { animation-delay: 0.18s; }
-        .dblink:nth-child(3) { animation-delay: 0.36s; }
+
+        .bouncing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .bouncing-dot:nth-child(2) { animation-delay: -0.16s; }
+        .bouncing-dot:nth-child(3) { animation-delay: 0s; }
+
         @keyframes bounce {
-            0%, 80%, 100% { transform: scale(0.2); opacity: 0.3; }
+            0%, 80%, 100% { transform: scale(0.4); opacity: 0.4; }
             40% { transform: scale(1.1); opacity: 1; }
         }
 
-        #answer-text { display: block; animation: fadein 0.18s ease; }
-
-        /* ── Anti-Eye-Tracking HUD Architecture ── */
-        .hud-container {
-            display: flex;
-            flex-direction: column;
-            gap: 7px;
+        /* ── Content Area & Layouts ── */
+        .content-area {
+            -webkit-app-region: no-drag;
+            height: 100%;
+            overflow: hidden;
         }
 
-        /* Question pill */
-        .hud-q-pill {
+        /* Split layout: Text on left, Code on right */
+        .split-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            height: 100%;
+            padding: 10px;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+
+        .text-panel, .code-panel {
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            overflow: hidden;
+            position: relative;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .panel-content {
+            height: 100%;
+            overflow-y: auto;
+            overflow-x: auto;
+            padding: 12px 14px;
+            box-sizing: border-box;
+            scroll-behavior: smooth;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+
+        .panel-content::-webkit-scrollbar {
+            display: none;
+        }
+
+        /* Full layout: single wide panel (MCQ, conceptual) */
+        .full-content {
+            height: 100%;
+            padding: 10px;
+            box-sizing: border-box;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .full-content-inner {
+            height: 100%;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            overflow-y: auto;
+            overflow-x: auto;
+            padding: 14px 18px;
+            box-sizing: border-box;
+            scroll-behavior: smooth;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+
+        .full-content-inner::-webkit-scrollbar {
+            display: none;
+        }
+
+        /* ── Markdown Content Styling ── */
+        .markdown-content {
+            line-height: 1.6;
+            color: var(--text-primary);
+            font-size: 13px;
+        }
+
+        .markdown-content h1, .markdown-content h2, .markdown-content h3 {
+            margin-top: 1rem;
+            margin-bottom: 0.5rem;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .markdown-content h1 { font-size: 1.25rem; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 4px; }
+        .markdown-content h2 { font-size: 1.15rem; color: #38bdf8; }
+        .markdown-content h3 { font-size: 1.05rem; }
+        .markdown-content p { margin-bottom: 0.65rem; }
+        .markdown-content ul, .markdown-content ol { margin-bottom: 0.65rem; padding-left: 1.4rem; }
+        .markdown-content li { margin-bottom: 0.3rem; }
+
+        .markdown-content code {
+            background-color: rgba(255, 255, 255, 0.10);
+            padding: 0.15rem 0.35rem;
+            border-radius: 0.25rem;
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            font-size: 12px;
+            color: #38bdf8;
+        }
+
+        .markdown-content pre {
+            position: relative;
+            background-color: var(--code-bg);
+            padding: 0.85rem 1rem;
+            border-radius: 6px;
+            margin: 0.75rem 0;
+            overflow-x: auto;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+
+        .markdown-content pre code {
+            background-color: transparent;
+            padding: 0;
+            color: #f1f5f9;
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .markdown-content blockquote {
+            border-left: 3px solid #38bdf8;
+            padding-left: 0.85rem;
+            margin: 0.65rem 0;
+            font-style: italic;
+            color: var(--text-secondary);
+            background: rgba(56, 189, 248, 0.05);
+            border-radius: 0 4px 4px 0;
+        }
+
+        .math {
+            font-family: 'Cambria Math', 'STIX Two Math', Georgia, serif;
+            white-space: nowrap;
+        }
+
+        /* ── MCQ High-Visibility Badges & Options ── */
+        .mcq-answer-pill {
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            align-self: flex-start;
-            padding: 2px 8px;
-            background: rgba(34, 211, 238, 0.08);
-            border: 1px solid rgba(34, 211, 238, 0.22);
-            border-radius: 5px;
-            font-size: 11px;
-            font-weight: 600;
-            color: var(--accent);
-            letter-spacing: 0.15px;
-        }
-        .q-icon { font-size: 10.5px; }
-
-        /* Say Out Loud Hero Card */
-        .say-card {
-            background: linear-gradient(135deg, rgba(34, 197, 94, 0.12) 0%, rgba(16, 185, 129, 0.05) 100%);
-            border: 1px solid rgba(34, 197, 94, 0.35);
-            border-left: 3.5px solid var(--green);
-            border-radius: 6px;
-            padding: 7px 10px 8px;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-        }
-        .say-tag {
-            font-size: 9px;
-            font-weight: 700;
-            letter-spacing: 0.6px;
-            text-transform: uppercase;
+            background: rgba(34, 197, 94, 0.20);
+            border: 1.5px solid rgba(34, 197, 94, 0.65);
             color: #4ade80;
-            margin-bottom: 2px;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        .say-quote {
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-weight: 700;
             font-size: 13.5px;
+            letter-spacing: 0.4px;
+            margin: 6px 0 10px 0;
+            box-shadow: 0 0 14px rgba(34, 197, 94, 0.25);
+        }
+
+        .mcq-option-line {
+            padding: 4px 8px;
+            margin: 3px 0;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .mcq-option-line.correct {
+            background: rgba(34, 197, 94, 0.15);
+            border-color: rgba(34, 197, 94, 0.5);
             font-weight: 600;
-            color: #f0fdf4;
-            line-height: 1.48;
-            letter-spacing: 0.1px;
+            color: #4ade80;
         }
 
-        /* 2-Column Split Grid */
-        .hud-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 9px;
-        }
-
-        .hud-col {
-            background: var(--card-bg);
-            border: 1px solid var(--card-border);
+        /* ── Code Blocks with Language Header & Hover Copy Button ── */
+        .code-block {
+            background-color: var(--code-bg);
+            margin-bottom: 0.85rem;
             border-radius: 6px;
-            padding: 7px 9px 8px;
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-            min-width: 0;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            position: relative;
+            overflow: hidden;
         }
-        .col-head {
-            font-size: 9px;
+
+        .code-header {
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 5px 10px;
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            font-size: 11px;
+            color: var(--text-secondary);
             font-weight: 700;
-            text-transform: uppercase;
             letter-spacing: 0.5px;
-            color: var(--muted);
-            margin-bottom: 2px;
+            text-transform: uppercase;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
             display: flex;
             align-items: center;
-            gap: 4px;
-        }
-        .col-icon { font-size: 10px; }
-
-        /* Left Column: Talking Points */
-        .bullet-list {
-            list-style: none;
-            display: flex;
-            flex-direction: column;
-            gap: 4.5px;
-        }
-        .bullet-row {
-            display: flex;
-            gap: 6px;
-            align-items: flex-start;
-            font-size: 11.5px;
-            line-height: 1.45;
-            color: #e2e8f0;
-        }
-        .bullet-dot {
-            color: var(--accent);
-            font-weight: 700;
-            flex-shrink: 0;
-            margin-top: 1px;
-            font-size: 11px;
-        }
-        .bullet-text {
-            word-break: break-word;
+            justify-content: space-between;
         }
 
-        /* Luminous Peripheral Anchor Chips (Anti-Eye-Tracking) */
-        .anchor {
-            background: rgba(34, 211, 238, 0.16);
-            border: 1px solid rgba(34, 211, 238, 0.42);
-            color: #38bdf8;
-            border-radius: 3px;
-            padding: 0.5px 5px;
-            font-weight: 600;
-            letter-spacing: 0.1px;
-            box-shadow: 0 0 6px rgba(34, 211, 238, 0.12);
-        }
-        .arrow-sep {
-            color: var(--accent);
-            font-weight: 700;
-            margin: 0 4px;
-            display: inline-block;
-            font-size: 11px;
-        }
-
-        /* Right Column: Breakdown Cards */
-        .breakdown-list {
-            display: flex;
-            flex-direction: column;
-            gap: 4.5px;
-        }
-        .breakdown-card {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-            background: rgba(255, 255, 255, 0.02);
-            border: 1px solid rgba(255, 255, 255, 0.04);
-            border-radius: 4px;
-            padding: 4px 6px;
-        }
-        .kv-badge {
-            font-size: 8.5px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.4px;
-            padding: 1px 5px;
-            border-radius: 3px;
-            display: inline-block;
-            align-self: flex-start;
-        }
-        .badge-rose {
-            background: rgba(244, 63, 94, 0.16);
-            border: 1px solid rgba(244, 63, 94, 0.35);
-            color: #fb7185;
-        }
-        .badge-emerald {
-            background: rgba(16, 185, 129, 0.16);
-            border: 1px solid rgba(16, 185, 129, 0.35);
-            color: #34d399;
-        }
-        .badge-amber {
-            background: rgba(245, 158, 11, 0.16);
-            border: 1px solid rgba(245, 158, 11, 0.35);
-            color: #fbbf24;
-        }
-        .badge-purple {
-            background: rgba(168, 85, 247, 0.16);
-            border: 1px solid rgba(168, 85, 247, 0.35);
-            color: #c084fc;
-        }
-        .badge-cyan {
-            background: rgba(34, 211, 238, 0.14);
-            border: 1px solid rgba(34, 211, 238, 0.35);
-            color: var(--accent);
-        }
-        .breakdown-val {
-            font-size: 11px;
-            line-height: 1.42;
-            color: var(--text-secondary);
-            word-break: break-word;
-        }
-
-        /* Code Block Card */
-        .hud-code-card {
-            background: rgba(0, 0, 0, 0.55);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 6px;
-            margin-top: 4px;
-            overflow: hidden;
-            font-family: 'JetBrains Mono', monospace;
-        }
-        .code-head {
-            padding: 2.5px 8px;
-            font-size: 9px;
-            font-weight: 700;
-            letter-spacing: 0.5px;
-            color: #94a3b8;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-            text-transform: uppercase;
-            background: rgba(255, 255, 255, 0.02);
-        }
-        .hud-code-card pre {
-            padding: 6px 10px;
-            font-size: 11px;
-            color: #e2e8f0;
-            line-height: 1.45;
-            white-space: pre;
+        .code-content {
+            padding: 10px 12px;
             overflow-x: auto;
+            position: relative;
         }
 
-        /* Raw Text / Streaming active state */
-        .raw-text {
-            color: #e2e8f0;
-            white-space: pre-wrap;
-            word-break: break-word;
+        .code-content pre {
+            background: transparent;
+            border: none;
+            margin: 0;
+            padding: 0;
+            position: relative;
+        }
+
+        .code-content code {
+            background: transparent;
+            color: #f8fafc;
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
             font-size: 12px;
-            line-height: 1.55;
-            padding: 4px 2px;
+            line-height: 1.45;
         }
-        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
-        .scursor {
-            color: var(--accent);
-            font-weight: 700;
-            animation: blink 0.75s infinite;
-            margin-left: 2px;
+
+        .no-code {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-muted);
+            font-style: italic;
         }
+
+        /* ── Hover Copy Button ── */
+        .copy-btn {
+            position: absolute;
+            top: 6px;
+            right: 8px;
+            background: rgba(15, 23, 42, 0.85);
+            color: var(--text-secondary);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            border-radius: 4px;
+            cursor: pointer;
+            -webkit-app-region: no-drag;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            opacity: 0.5;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            z-index: 25;
+            user-select: none;
+            backdrop-filter: blur(8px);
+        }
+
+        pre:hover .copy-btn,
+        .code-block:hover .copy-btn,
+        .copy-btn:hover {
+            opacity: 1;
+            background: rgba(15, 23, 42, 0.98);
+            border-color: rgba(56, 189, 248, 0.6);
+            color: #38bdf8;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+        }
+
+        .copy-btn.copied {
+            background: rgba(34, 197, 94, 0.95) !important;
+            border-color: rgba(34, 197, 94, 1) !important;
+            color: #fff !important;
+            opacity: 1 !important;
+            transform: scale(0.98);
+        }
+
+        /* ── Helper utilities ── */
+        .hidden { display: none !important; }
+        .visible { display: block !important; }
     </style>
 </head>
 <body>
-
-<div id="header">
-    <div class="hl">
-        <div id="mic-dot"></div>
-        <span id="status-label">Interview Co-Pilot</span>
-    </div>
-    <div class="hl" style="-webkit-app-region: no-drag">
-        <button class="nav-btn" id="btn-prev" disabled title="Previous (Alt+Left)">&#8249;</button>
-        <span id="q-counter">Q 0/0</span>
-        <button class="nav-btn" id="btn-next" disabled title="Next (Alt+Right)">&#8250;</button>
-    </div>
-    <div class="hr">
-        <button class="icon-btn" id="reset-btn" title="Reset session (Clear)">&#8635;</button>
-        <button class="icon-btn" id="close-btn" title="Close">&#10005;</button>
-    </div>
-</div>
-
-<div id="hearing-strip">
-    <span>&#9679;</span>
-    <span id="hearing-text">Hearing&#8230;</span>
-</div>
-
-<div id="scroll-wrap">
-    <div id="answer-body">
-        <div id="thinking-msg">
-            <div class="dblink"></div>
-            <div class="dblink"></div>
-            <div class="dblink"></div>
-            <span id="thinking-label" style="margin-left:4px">Analyzing&#8230;</span>
+    <div class="main-container has-header">
+        <!-- Draggable Header -->
+        <div class="window-header">
+            <div class="window-title">
+                <span>AI Response</span>
+                <span class="title-badge" id="skillBadge">AI</span>
+            </div>
+            <div class="window-controls">
+                <button id="close-window-btn" class="window-btn window-btn-close" title="Close (Cmd+Shift+V / Esc)">×</button>
+            </div>
         </div>
-        <div id="answer-text"></div>
+
+        <!-- Loading State -->
+        <div id="loading" class="loading">
+            <div class="loading-compact">
+                <span class="loading-text">Analyzing</span>
+                <div class="dots-container">
+                    <div class="bouncing-dot"></div>
+                    <div class="bouncing-dot"></div>
+                    <div class="bouncing-dot"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Response Content -->
+        <div id="response-content" class="content-area hidden">
+            <!-- Split Layout (Code on right, explanation on left) -->
+            <div id="split-layout" class="split-layout hidden">
+                <div class="text-panel">
+                    <div class="panel-content" tabindex="0">
+                        <div id="text-content" class="markdown-content"></div>
+                    </div>
+                </div>
+                <div class="code-panel">
+                    <div class="panel-content" tabindex="0">
+                        <div id="code-content"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Full Content (MCQ, Concepts, Math) -->
+            <div id="full-content" class="full-content hidden">
+                <div class="full-content-inner" tabindex="0">
+                    <div id="full-markdown" class="markdown-content"></div>
+                </div>
+            </div>
+        </div>
     </div>
-</div>
 
-<script>
-/* ── State ── */
-var history = [], histIdx = -1, initialized = false;
-var hearingTimer = null, isStreaming = false, streamBuffer = '';
-var currentStreamingMessageId = null, lastHandledMessageId = null, lastHandledText = null;
+    <script>
+        let currentLayout = 'split';
+        let hasCode = false;
+        let isStreaming = false;
+        let streamAccumulator = '';
+        let streamTimer = null;
+        let scrollableElements = [];
+        let initialized = false;
 
-/* ── DOM ── */
-var micDot       = document.getElementById('mic-dot');
-var hearingStrip = document.getElementById('hearing-strip');
-var hearingTxt   = document.getElementById('hearing-text');
-var thinkingMsg  = document.getElementById('thinking-msg');
-var thinkingLbl  = document.getElementById('thinking-label');
-var answerText   = document.getElementById('answer-text');
-var qCounter     = document.getElementById('q-counter');
-var btnPrev      = document.getElementById('btn-prev');
-var btnNext      = document.getElementById('btn-next');
+        document.addEventListener('DOMContentLoaded', initLLMResponseWindow);
+        if (document.readyState === 'complete' || document.readyState === 'interactive') {
+            setTimeout(initLLMResponseWindow, 0);
+        }
 
-/* ── Hearing State ── */
-function showHearing(text) {
-    var preview = text ? (text.length > 52 ? text.substring(0, 50) + '\u2026' : text) : 'Hearing\u2026';
-    hearingTxt.textContent = preview;
-    hearingStrip.classList.add('show');
-    micDot.className = 'hear';
-    clearTimeout(hearingTimer);
-    hearingTimer = setTimeout(hideHearing, 4000);
-}
-function hideHearing() {
-    hearingStrip.classList.remove('show');
-    micDot.className = 'on';
-}
+        function initLLMResponseWindow() {
+            if (initialized) return;
+            initialized = true;
 
-/* ── Viewport States ── */
-function showIdle() {
-    thinkingMsg.classList.remove('show');
-    answerText.innerHTML = renderIdleHUD();
-    answerText.style.display = 'block';
-}
-
-function renderIdleHUD() {
-    return '<div class="hud-container">' +
-        '<div class="say-card">' +
-            '<div class="say-tag">\uD83D\uDDE3 SAY OUT LOUD (OPENING 3 SECONDS)</div>' +
-            '<div class="say-quote">&ldquo;Ready &#8212; Speak or ask any technical or behavioral question. Response will format here with spoken opening &amp; anchors.&rdquo;</div>' +
-        '</div>' +
-        '<div class="hud-grid">' +
-            '<div class="hud-col">' +
-                '<div class="col-head"><span class="col-icon">\u26A1</span> TALKING POINTS (SPOKEN)</div>' +
-                '<ul class="bullet-list">' +
-                    '<li class="bullet-row"><span class="bullet-dot">&bull;</span><span class="bullet-text">Glance at <mark class="anchor">cyan anchor pills</mark> in peripheral vision in under 0.3s.</span></li>' +
-                    '<li class="bullet-row"><span class="bullet-dot">&bull;</span><span class="bullet-text">Speak naturally while maintaining <mark class="anchor">direct eye contact</mark> with the webcam.</span></li>' +
-                    '<li class="bullet-row"><span class="bullet-dot">&bull;</span><span class="bullet-text">Direct <mark class="anchor">8th-to-10th grade English</mark> conveys senior depth without fluff.</span></li>' +
-                '</ul>' +
-            '</div>' +
-            '<div class="hud-col">' +
-                '<div class="col-head"><span class="col-icon">\uD83C\uDFAF</span> ARCHITECTURE &amp; GOTCHAS</div>' +
-                '<div class="breakdown-list">' +
-                    '<div class="breakdown-card"><span class="kv-badge badge-rose">PROBLEM</span><span class="breakdown-val">Production bottleneck, failure mode, or latency root cause.</span></div>' +
-                    '<div class="breakdown-card"><span class="kv-badge badge-emerald">THE FIX</span><span class="breakdown-val">B-Tree, Redis, ONNX Runtime, or PostgreSQL schema design.</span></div>' +
-                    '<div class="breakdown-card"><span class="kv-badge badge-amber">GOTCHA</span><span class="breakdown-val">Senior edge case, trade-off, or caching invalidation limit.</span></div>' +
-                    '<div class="breakdown-card"><span class="kv-badge badge-purple">METRIC</span><span class="breakdown-val">ClinicOS (420ms&#8594;18ms), Vedprada (99.9% uptime), REC, AI CCTV.</span></div>' +
-                '</div>' +
-            '</div>' +
-        '</div>' +
-    '</div>';
-}
-
-function showThinking(hint) {
-    thinkingMsg.classList.add('show');
-    thinkingLbl.textContent = hint ? ('Analyzing: "' + hint.substring(0, 48) + (hint.length > 48 ? '\u2026' : '"')) : 'Analyzing\u2026';
-    if (answerText) answerText.style.opacity = '0.55';
-}
-
-function autoResizeWindow() {
-    if (window.electronAPI && window.electronAPI.resizeLlmWindowForContent) {
-        var h = document.body.scrollHeight || 380;
-        window.electronAPI.resizeLlmWindowForContent({
-            measuredHeight: Math.max(380, h),
-            hasCode: false
-        }).catch(function(){});
-    }
-}
-
-function showAnswer(html) {
-    thinkingMsg.classList.remove('show');
-    if (answerText) answerText.style.opacity = '1';
-    answerText.innerHTML = html;
-    answerText.style.display = 'block';
-    var w = document.getElementById('scroll-wrap');
-    if (w) w.scrollTop = 0;
-    autoResizeWindow();
-}
-
-/* ── History Navigation ── */
-function pushHistory(raw) {
-    var rendered = renderAnswer(raw);
-    history.push({ raw: raw, rendered: rendered });
-    histIdx = history.length - 1;
-    updateNav();
-    showAnswer(rendered);
-}
-function updateNav() {
-    var n = history.length;
-    qCounter.textContent = n > 0 ? ('Q ' + (histIdx + 1) + '/' + n) : 'Q 0/0';
-    btnPrev.disabled = histIdx <= 0;
-    btnNext.disabled = histIdx >= history.length - 1;
-}
-function navigate(delta) {
-    var next = histIdx + delta;
-    if (next < 0 || next >= history.length) return;
-    histIdx = next;
-    updateNav();
-    showAnswer(history[histIdx].rendered);
-}
-function resetSession() {
-    if (streamRenderTimer) { clearTimeout(streamRenderTimer); streamRenderTimer = null; }
-    history = []; histIdx = -1; isStreaming = false; streamBuffer = '';
-    currentStreamingMessageId = null; lastHandledMessageId = null; lastHandledText = null;
-    updateNav(); showIdle();
-}
-
-/* ── Progressive HUD Streaming (Anti-Eye-Tracking) ── */
-var streamRenderTimer = null;
-
-function appendStreamChunk(chunk, msgId) {
-    if (msgId && currentStreamingMessageId && msgId !== currentStreamingMessageId) return;
-    if (!chunk || !isStreaming) return;
-    streamBuffer += chunk;
-    thinkingMsg.classList.remove('show');
-    if (answerText) answerText.style.opacity = '1';
-
-    // Progressive HUD update throttled at 40ms — updates directly into 2-column cards, NEVER raw text
-    if (!streamRenderTimer) {
-        streamRenderTimer = setTimeout(function() {
-            streamRenderTimer = null;
-            if (isStreaming && streamBuffer) {
-                var html = renderStructuredOrFallback(streamBuffer);
-                answerText.innerHTML = html;
-                answerText.style.display = 'block';
-                autoResizeWindow();
+            const api = window.electronAPI;
+            if (!api) {
+                console.warn('[LLM-RESPONSE] No electronAPI found');
+                return;
             }
-        }, 40);
-    }
-}
 
-function finalizeStream(override) {
-    if (streamRenderTimer) {
-        clearTimeout(streamRenderTimer);
-        streamRenderTimer = null;
-    }
-    var finalRaw = override || streamBuffer;
-    streamBuffer = '';
-    isStreaming = false;
-    micDot.className = 'on';
-    thinkingMsg.classList.remove('show');
-    if (answerText) answerText.style.opacity = '1';
-    if (finalRaw && finalRaw.trim()) {
-        pushHistory(finalRaw);
-    }
-}
+            // Close button
+            const closeBtn = document.getElementById('close-window-btn');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', () => {
+                    try {
+                        if (api.closeWindow) api.closeWindow();
+                        else if (window.api && window.api.send) window.api.send('quit-app');
+                        else window.close();
+                    } catch (_) {
+                        try { window.close(); } catch (_) {}
+                    }
+                });
+            }
 
-/* ── Parser & Renderer ── */
-function renderAnswer(raw) {
-    if (!raw || !raw.trim()) return '<span style="color:var(--muted)">No answer received.</span>';
-    return renderStructuredOrFallback(raw);
-}
+            // Opacity sync
+            if (api.onOpacityUpdate) {
+                api.onOpacityUpdate((_e, opacity) => {
+                    document.body.style.opacity = opacity;
+                });
+            }
+            if (api.getOpacity) {
+                api.getOpacity().then(o => { if (o) document.body.style.opacity = o; }).catch(() => {});
+            }
 
-function highlightAnchors(s) {
-    if (!s) return '';
-    var escaped = escHtml(s);
-    // Bracketed anchors: [like this]
-    escaped = escaped.replace(/\[([^\]]+)\]/g, '<mark class="anchor">$1</mark>');
-    // Bold anchors if no brackets: **like this**
-    escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<mark class="anchor">$1</mark>');
-    // Style arrow separator → or ->
-    escaped = escaped.replace(/(\s*(?:→|-&gt;)\s*)/g, '<span class="arrow-sep">&#8594;</span>');
-    return escaped;
-}
+            // Session reset
+            if (api.onSessionCleared) {
+                api.onSessionCleared(() => {
+                    hideLoadingState();
+                    const resp = document.getElementById('response-content');
+                    if (resp) resp.classList.add('hidden');
+                });
+            }
 
-function kvBadge(k) {
-    var rawK = String(k || '').trim().replace(/^The\s+/i, '');
-    var lower = rawK.toLowerCase();
-    var cls = 'badge-cyan', label = rawK;
-    if (/problem|bottleneck|situation|failure|issue/.test(lower)) {
-        cls = 'badge-rose'; label = 'PROBLEM';
-    } else if (/architecture|fix|approach|action|solution/.test(lower)) {
-        cls = 'badge-emerald'; label = 'THE FIX';
-    } else if (/trade|gotcha|limit|pitfall|nuance|lesson|risk/.test(lower)) {
-        cls = 'badge-amber'; label = 'GOTCHA';
-    } else if (/metric|result|impact|project|real-life|clinicos|vedprada|rec|cctv/.test(lower)) {
-        cls = 'badge-purple'; label = 'METRIC';
-    } else if (/complexity|time|space/.test(lower)) {
-        cls = 'badge-cyan'; label = 'COMPLEXITY';
-    }
-    return '<span class="kv-badge ' + cls + '">' + escHtml(label) + '</span>';
-}
+            // Loading state
+            if (api.onShowLoading) {
+                api.onShowLoading(() => showLoadingState());
+            }
 
-function renderStructuredOrFallback(raw) {
-    var lines = raw.split('\n');
-    var question = '', sayText = '', talkingPoints = [], breakdownRows = [];
-    var inCode = false, codeLang = '', codeLines = [], codeBlocks = [];
-    var mode = 'none';
+            // Streaming start
+            if (api.onTranscriptionLlmResponseStart) {
+                api.onTranscriptionLlmResponseStart((_e, data) => {
+                    const skill = data && data.skill;
+                    updateSkillBadge(skill);
+                    streamAccumulator = '';
+                    isStreaming = true;
+                    showLoadingState();
+                });
+            }
 
-    for (var i = 0; i < lines.length; i++) {
-        var line = lines[i];
-        var fence = line.match(/^```(\w*)/);
-        if (fence && !inCode) {
-            inCode = true; codeLang = fence[1] || 'code'; codeLines = []; continue;
-        }
-        if (inCode && line.trim() === '```') {
-            inCode = false;
-            codeBlocks.push({ lang: codeLang, code: codeLines.join('\n') });
-            continue;
-        }
-        if (inCode) { codeLines.push(line); continue; }
+            // Streaming chunk
+            if (api.onTranscriptionLlmResponseChunk) {
+                api.onTranscriptionLlmResponseChunk((_e, payload) => {
+                    if (!payload) return;
+                    const chunk = payload.delta || payload.chunk || payload.text || (typeof payload === 'string' ? payload : '');
+                    if (!chunk) return;
+                    streamAccumulator += chunk;
 
-        var t = line.trim();
-        if (!t) continue;
+                    if (!streamTimer) {
+                        streamTimer = setTimeout(() => {
+                            streamTimer = null;
+                            if (streamAccumulator.trim()) {
+                                hideLoadingState();
+                                displayResponse({ content: streamAccumulator });
+                            }
+                        }, 50);
+                    }
+                });
+            }
 
-        // Detect Say Out Loud / Start With (capture even if preceded by bullet • or emoji)
-        if (/(?:Start with|Say out loud|Say|Opening)[:]/i.test(t)) {
-            sayText = t.replace(/^[^a-zA-Z]*(?:Start with|Say out loud|Say|Opening)[^:]*[:*]+\s*/i, '').replace(/^["'“”]|["'“”]$/g, '').trim();
-            mode = 'say';
-            continue;
-        }
-
-        // Detect Question header
-        if (/Question[:]/i.test(t)) {
-            question = t.replace(/^[^a-zA-Z]*(?:Question|Topic)[^:]*[:*]+\s*/i, '').replace(/^["'“”]|["'“”]$/g, '').trim();
-            mode = 'none';
-            continue;
-        }
-
-        // Detect Talking Points (handles "4 Talking Points:", "⚡ Talking Points:", etc.)
-        if (/(?:Talking Points|Key Points|Spoken Points|Points)[:]?/i.test(t)) {
-            mode = 'points';
-            continue;
-        }
-
-        // Detect Architecture / Breakdown (handles "® Architecture & Problem Breakdown:", "🎯 Architecture...", etc.)
-        if (!/^[•·–—\-*]\s+/.test(t) && /(?:Architecture|Key.{0,10}Insights|Breakdown|Technical Breakdown)[:]?/i.test(t)) {
-            mode = 'breakdown';
-            continue;
-        }
-
-        // Detect Bullets
-        if (/^[•·–—\-*]\s+/.test(t) || /^\d+\.\s+/.test(t)) {
-            var content = t.replace(/^[•·–—\-*]\s+/, '').replace(/^\d+\.\s+/, '').trim();
-            if (mode === 'say') {
-                sayText += ' ' + content;
-            } else if (mode === 'points') {
-                talkingPoints.push(content);
-            } else if (mode === 'breakdown') {
-                var ci = content.indexOf(':');
-                if (ci > 0 && ci < 35) {
-                    breakdownRows.push({
-                        key: content.substring(0, ci).replace(/^\*\*|\*\*$/g, '').trim(),
-                        val: content.substring(ci + 1).replace(/^[:\s*]+/, '').trim()
-                    });
-                } else {
-                    breakdownRows.push({ key: 'NOTE', val: content });
+            // Final responses
+            function handleResponse(data) {
+                if (streamTimer) {
+                    clearTimeout(streamTimer);
+                    streamTimer = null;
                 }
+                isStreaming = false;
+                const text = (data && (data.content || data.response)) || (typeof data === 'string' ? data : '');
+                if (!text || !text.trim()) {
+                    if (streamAccumulator.trim()) {
+                        hideLoadingState();
+                        displayResponse({ content: streamAccumulator, metadata: data && data.metadata });
+                    }
+                    return;
+                }
+                streamAccumulator = '';
+                hideLoadingState();
+                displayResponse(data);
+                setupScrolling();
+            }
+
+            if (api.onDisplayLlmResponse) {
+                api.onDisplayLlmResponse((_e, data) => {
+                    const actualData = data || _e;
+                    handleResponse(actualData);
+                });
+            }
+
+            if (api.onTranscriptionLlmResponse) {
+                api.onTranscriptionLlmResponse((_e, data) => {
+                    const actualData = data || _e;
+                    handleResponse(actualData);
+                });
+            }
+        }
+
+        function updateSkillBadge(skill) {
+            const badge = document.getElementById('skillBadge');
+            if (!badge) return;
+            if (!skill || skill === 'general') {
+                badge.textContent = 'AI';
             } else {
-                var colon = content.indexOf(':');
-                if (colon > 0 && colon < 30) {
-                    breakdownRows.push({
-                        key: content.substring(0, colon).replace(/^\*\*|\*\*$/g, '').trim(),
-                        val: content.substring(colon + 1).replace(/^[:\s*]+/, '').trim()
-                    });
-                } else {
-                    talkingPoints.push(content);
-                }
+                badge.textContent = String(skill).toUpperCase();
             }
-            continue;
         }
 
-        // Continuation lines
-        if (mode === 'say' && !/^[\uD83D\uDDE3\u26A1\uD83C\uDFAF\u2753#]/.test(t)) {
-            sayText += ' ' + t;
-        } else if (mode === 'none' && !question && t.length < 80 && !t.includes('.')) {
-            question = t;
-        }
-    }
-
-    // Default fallbacks if empty
-    if (!sayText && talkingPoints.length === 0 && breakdownRows.length === 0) {
-        sayText = raw.length > 250 ? raw.substring(0, 240) + '...' : raw;
-    }
-
-    var html = '<div class="hud-container">';
-
-    // Question pill
-    if (question) {
-        html += '<div class="hud-q-pill"><span class="q-icon">\u2753</span><span class="q-title">' + escHtml(question) + '</span></div>';
-    }
-
-    // Say Out Loud hero card
-    if (sayText) {
-        html += '<div class="say-card">' +
-            '<div class="say-tag">\uD83D\uDDE3 SAY OUT LOUD (OPENING 3 SECONDS)</div>' +
-            '<div class="say-quote">&ldquo;' + escHtml(sayText.replace(/^["\u201C]|["\u201D]$/g, '')) + '&rdquo;</div>' +
-            '</div>';
-    }
-
-    // 2-Column Split Grid
-    html += '<div class="hud-grid">';
-
-    // Left Column: Spoken Talking Points
-    html += '<div class="hud-col">' +
-        '<div class="col-head"><span class="col-icon">\u26A1</span> TALKING POINTS (SPOKEN)</div>' +
-        '<ul class="bullet-list">';
-    for (var j = 0; j < talkingPoints.length; j++) {
-        html += '<li class="bullet-row">' +
-            '<span class="bullet-dot">&bull;</span>' +
-            '<span class="bullet-text">' + highlightAnchors(talkingPoints[j]) + '</span>' +
-            '</li>';
-    }
-    if (talkingPoints.length === 0) {
-        html += '<li class="bullet-row"><span class="bullet-dot">&bull;</span><span class="bullet-text" style="color:var(--muted)">' + (isStreaming ? 'Synthesizing key anchors\u2026' : 'Deliver your response with authentic conversational depth.') + '</span></li>';
-    }
-    html += '</ul></div>';
-
-    // Right Column: Architecture & Breakdown
-    html += '<div class="hud-col">' +
-        '<div class="col-head"><span class="col-icon">\uD83C\uDFAF</span> ARCHITECTURE &amp; GOTCHAS</div>' +
-        '<div class="breakdown-list">';
-    for (var k = 0; k < breakdownRows.length; k++) {
-        var row = breakdownRows[k];
-        html += '<div class="breakdown-card">' +
-            kvBadge(row.key) +
-            '<span class="breakdown-val">' + highlightAnchors(row.val) + '</span>' +
-            '</div>';
-    }
-    if (breakdownRows.length === 0) {
-        html += '<div class="breakdown-card"><span class="breakdown-val" style="color:var(--muted)">' + (isStreaming ? 'Synthesizing architecture &amp; trade-offs\u2026' : 'Reference core architecture trade-offs and project metrics.') + '</span></div>';
-    }
-    html += '</div></div>';
-
-    html += '</div>'; // End hud-grid
-
-    // Code blocks
-    for (var c = 0; c < codeBlocks.length; c++) {
-        html += '<div class="hud-code-card">' +
-            '<div class="code-head">' + escHtml(codeBlocks[c].lang || 'CODE') + '</div>' +
-            '<pre><code>' + escHtml(codeBlocks[c].code) + '</code></pre>' +
-            '</div>';
-    }
-
-    html += '</div>'; // End hud-container
-    return html;
-}
-
-function escHtml(s) {
-    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-/* ── Init ── */
-document.addEventListener('DOMContentLoaded', init);
-if (document.readyState !== 'loading') setTimeout(init, 0);
-
-function init() {
-    if (initialized) return;
-    initialized = true;
-
-    // Show initial rich HUD layout immediately
-    showIdle();
-
-    btnPrev.addEventListener('click', function(){ navigate(-1); });
-    btnNext.addEventListener('click', function(){ navigate(1); });
-    document.getElementById('reset-btn').addEventListener('click', function(){
-        resetSession();
-        if (window.electronAPI && window.electronAPI.clearSessionMemory)
-            window.electronAPI.clearSessionMemory().catch(function(){});
-    });
-    document.getElementById('close-btn').addEventListener('click', function(){
-        if (window.electronAPI && window.electronAPI.closeWindow) window.electronAPI.closeWindow();
-    });
-    document.addEventListener('keydown', function(e){
-        if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); navigate(-1); }
-        if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); navigate(1); }
-        if (e.key === '[') navigate(-1);
-        if (e.key === ']') navigate(1);
-    });
-
-    if (!window.electronAPI) { console.warn('[COPILOT] No electronAPI'); return; }
-    var api = window.electronAPI;
-
-    // Ensure window dimensions are expanded to 780x380 px for 2 columns
-    if (api.expandLlmWindow) {
-        api.expandLlmWindow({ width: 780, measuredHeight: 380 }).catch(function(){});
-    }
-
-    if (api.onMicReady) api.onMicReady(function(){ micDot.className = 'on'; });
-    if (api.onRecordingStarted) api.onRecordingStarted(function(){ micDot.className = 'on'; });
-    if (api.onRecordingStopped) api.onRecordingStopped(function(){ micDot.className = ''; });
-    if (api.onSpeechActive) api.onSpeechActive(function(){ showHearing('Hearing speech\u2026'); });
-
-    /* Speech received events */
-    function handleSpeechFragment() {
-        var args = Array.prototype.slice.call(arguments);
-        var p = args.length >= 2 ? args[1] : args[0];
-        var t = (p && p.text) || (typeof p === 'string' ? p : '');
-        if (t) showHearing(t);
-    }
-    if (api.onTranscriptionReceived) api.onTranscriptionReceived(handleSpeechFragment);
-    if (api.onInterimTranscription) api.onInterimTranscription(handleSpeechFragment);
-    if (api.onTranscription) api.onTranscription(handleSpeechFragment);
-
-    if (api.onShowLoading) api.onShowLoading(function(){
-        var args = Array.prototype.slice.call(arguments);
-        var q = args.length >= 2 ? args[1] : (typeof args[0] === 'string' ? args[0] : null);
-        hideHearing(); showThinking(q);
-    });
-    if (api.onSessionCleared) api.onSessionCleared(function(){ resetSession(); });
-
-    /* streaming start */
-    if (api.onTranscriptionLlmResponseStart) api.onTranscriptionLlmResponseStart(function(){
-        var args = Array.prototype.slice.call(arguments);
-        var data = args.length >= 2 ? args[1] : args[0];
-        if (streamRenderTimer) { clearTimeout(streamRenderTimer); streamRenderTimer = null; }
-        streamBuffer = '';
-        var msgId = (data && data.messageId) || null;
-        currentStreamingMessageId = msgId;
-        isStreaming = true;
-        micDot.className = 'on'; 
-        hideHearing();
-        if (data && data.instantResponse) {
-            isStreaming = false;
-            lastHandledMessageId = msgId;
-            lastHandledText = data.instantResponse;
-            pushHistory(data.instantResponse);
-        } else {
-            showThinking(data && (data.questionPreview || data.questionTitle));
-        }
-    });
-
-    /* streaming chunk — render immediately into HUD */
-    if (api.onTranscriptionLlmResponseChunk) api.onTranscriptionLlmResponseChunk(function(){
-        var args = Array.prototype.slice.call(arguments);
-        var payload = args.length >= 2 ? args[1] : args[0];
-        if (!payload) return;
-        var msgId = payload.messageId;
-        if (msgId && currentStreamingMessageId && msgId !== currentStreamingMessageId) return; // Drop preempted chunk
-        if (!isStreaming) return;
-        var chunk = payload.delta || payload.chunk || payload.text || (typeof payload === 'string' ? payload : '');
-        if (chunk) appendStreamChunk(chunk, msgId);
-    });
-
-    /* final response — deduplicated across IPC channels */
-    function handleFinal() {
-        var args = Array.prototype.slice.call(arguments);
-        var data = args.length >= 2 ? args[1] : args[0];
-        hideHearing();
-        var text = (data && (data.response || data.content)) || (typeof data === 'string' ? data : '');
-        var msgId = (data && (data.messageId || (data.metadata && data.metadata.messageId))) || null;
-
-        // If message belongs to an older preempted request, discard it
-        if (msgId && currentStreamingMessageId && msgId !== currentStreamingMessageId) return;
-
-        if (!text || !text.trim()) {
-            if (isStreaming && streamBuffer) finalizeStream(streamBuffer);
-            return;
+        function showLoadingState() {
+            const loadingElement = document.getElementById('loading');
+            const responseElement = document.getElementById('response-content');
+            if (loadingElement) loadingElement.classList.remove('hidden');
+            if (responseElement) responseElement.classList.add('hidden');
         }
 
-        // Deduplication: if NOT streaming and we already handled this exact message ID, ignore
-        if (msgId && msgId === lastHandledMessageId && !isStreaming) return;
-        if (!msgId && text === lastHandledText && !isStreaming) return;
-        lastHandledMessageId = msgId;
-        lastHandledText = text;
+        function hideLoadingState() {
+            const loadingElement = document.getElementById('loading');
+            if (loadingElement) loadingElement.classList.add('hidden');
+        }
 
-        finalizeStream(text);
-    }
-    if (api.onTranscriptionLlmResponse) api.onTranscriptionLlmResponse(handleFinal);
-    if (api.onDisplayLlmResponse) api.onDisplayLlmResponse(handleFinal);
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
 
-    if (api.onBacktrackAnswer) api.onBacktrackAnswer(function(_e, p){ if (p && typeof p.delta === 'number') navigate(p.delta); });
-    if (api.onOpacityUpdate) api.onOpacityUpdate(function(_e, o){ document.body.style.opacity = o; });
-    if (api.getOpacity) api.getOpacity().then(function(o){ if (o) document.body.style.opacity = o; }).catch(function(){});
+        function renderMarkdown(text) {
+            if (!text) return '';
+            let parsed = '';
+            if (typeof marked !== 'undefined' && typeof marked.parse === 'function') {
+                parsed = marked.parse(text);
+            } else if (typeof markdown !== 'undefined' && typeof markdown.toHTML === 'function') {
+                parsed = markdown.toHTML(text);
+            } else {
+                parsed = escapeHtml(text).replace(/\n/g, '<br>');
+            }
 
-    console.log('[COPILOT] Ready.');
-}
-</script>
+            // Highlight MCQ answer patterns cleanly
+            parsed = parsed.replace(/\*\*(?:Q\d+\s+)?Correct Option:\s*([^*]+)\*\*/gi, (match, opt) => {
+                return `<div class="mcq-answer-pill">✓ Correct Option: ${opt.trim()}</div>`;
+            });
+
+            return parsed;
+        }
+
+        function extractCodeBlocks(text) {
+            const blocks = [];
+            if (!text) return blocks;
+            const regex = /(```|~~~)([^\n]*)\n([\s\S]*?)\1/g;
+            let match;
+            while ((match = regex.exec(text)) !== null) {
+                const info = (match[2] || '').trim();
+                const langToken = info.split(/\s+/)[0] || 'code';
+                blocks.push({ language: langToken, code: match[3], fullMatch: match[0] });
+            }
+            return blocks;
+        }
+
+        function attachCopy(btn, text) {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                    let ok = false;
+                    if (window.electronAPI && typeof window.electronAPI.copyToClipboard === 'function') {
+                        ok = await window.electronAPI.copyToClipboard(text);
+                    }
+                    if (!ok && navigator.clipboard && navigator.clipboard.writeText) {
+                        await navigator.clipboard.writeText(text);
+                        ok = true;
+                    }
+                    if (!ok) {
+                        const ta = document.createElement('textarea');
+                        ta.value = text;
+                        document.body.appendChild(ta);
+                        ta.select();
+                        document.execCommand('copy');
+                        ta.remove();
+                        ok = true;
+                    }
+                    if (ok) {
+                        btn.classList.add('copied');
+                        const originalHtml = btn.innerHTML;
+                        btn.innerHTML = '✓ Copied';
+                        setTimeout(() => {
+                            btn.classList.remove('copied');
+                            btn.innerHTML = originalHtml;
+                        }, 1400);
+                    }
+                } catch (err) {
+                    console.warn('[LLM-RESPONSE] Copy failed', err);
+                }
+            });
+        }
+
+        function displayResponse(data) {
+            const responseElement = document.getElementById('response-content');
+            if (responseElement) responseElement.classList.remove('hidden');
+
+            const response = (data && (data.content || data.response)) || (typeof data === 'string' ? data : '');
+            if (!response || !response.trim()) return;
+
+            const metadata = data.metadata || {};
+            if (metadata.skill) updateSkillBadge(metadata.skill);
+
+            const codeBlocks = extractCodeBlocks(response);
+            hasCode = codeBlocks.length > 0;
+
+            if (hasCode) {
+                displaySplitLayout(response, codeBlocks);
+            } else {
+                displayFullLayout(response);
+            }
+
+            // Window resize request based on content metrics
+            if (window.electronAPI && window.electronAPI.resizeLlmWindowForContent) {
+                const lineCount = response.split('\n').length;
+                window.electronAPI.resizeLlmWindowForContent({
+                    lineCount,
+                    hasCode,
+                    codeBlocks: codeBlocks.length,
+                    complexity: hasCode ? 'medium' : 'low'
+                }).catch(() => {});
+            }
+        }
+
+        function displaySplitLayout(response, codeBlocks) {
+            document.getElementById('split-layout').classList.remove('hidden');
+            document.getElementById('full-content').classList.add('hidden');
+
+            // Strip code blocks from text panel
+            let textContent = response;
+            codeBlocks.forEach(block => {
+                textContent = textContent.replace(block.fullMatch, '');
+            });
+            textContent = textContent.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
+
+            const textPanel = document.getElementById('text-content');
+            textPanel.innerHTML = renderMarkdown(textContent);
+            if (window.renderMathInElement) window.renderMathInElement(textPanel);
+
+            // Render code blocks into code panel
+            const codeContainer = document.getElementById('code-content');
+            codeContainer.innerHTML = '';
+
+            codeBlocks.forEach(block => {
+                const blockDiv = document.createElement('div');
+                blockDiv.className = 'code-block';
+                blockDiv.innerHTML = `
+                    <div class="code-header">${escapeHtml(block.language.toUpperCase())}</div>
+                    <div class="code-content">
+                        <pre><code>${escapeHtml(block.code)}</code></pre>
+                    </div>
+                `;
+                const pre = blockDiv.querySelector('pre');
+                const btn = document.createElement('button');
+                btn.className = 'copy-btn';
+                btn.innerHTML = 'Copy';
+                attachCopy(btn, block.code || '');
+                pre.appendChild(btn);
+
+                codeContainer.appendChild(blockDiv);
+            });
+        }
+
+        function displayFullLayout(response) {
+            document.getElementById('split-layout').classList.add('hidden');
+            document.getElementById('full-content').classList.remove('hidden');
+
+            const full = document.getElementById('full-markdown');
+            full.innerHTML = renderMarkdown(response);
+            if (window.renderMathInElement) window.renderMathInElement(full);
+
+            // Add hover copy buttons to any pre code blocks in full view
+            const pres = full.querySelectorAll('pre');
+            pres.forEach(pre => {
+                if (pre.querySelector('.copy-btn')) return;
+                const codeEl = pre.querySelector('code');
+                const text = codeEl ? codeEl.textContent : pre.textContent;
+                const btn = document.createElement('button');
+                btn.className = 'copy-btn';
+                btn.innerHTML = 'Copy';
+                attachCopy(btn, text || '');
+                pre.appendChild(btn);
+            });
+        }
+
+        function setupScrolling() {
+            setTimeout(() => {
+                if (hasCode) {
+                    scrollableElements = [
+                        document.querySelector('.text-panel .panel-content'),
+                        document.querySelector('.code-panel .panel-content')
+                    ].filter(Boolean);
+                } else {
+                    scrollableElements = [
+                        document.querySelector('.full-content-inner')
+                    ].filter(Boolean);
+                }
+            }, 100);
+        }
+
+        // Keyboard scrolling navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                if (window.electronAPI && window.electronAPI.closeWindow) {
+                    window.electronAPI.closeWindow();
+                }
+                return;
+            }
+
+            const activeElement = document.activeElement;
+            let target = scrollableElements.find(el => el === activeElement || el.contains(activeElement)) || scrollableElements[0];
+            if (!target) return;
+
+            const scrollDelta = 60;
+            switch(e.key) {
+                case 'ArrowUp':
+                    e.preventDefault();
+                    target.scrollBy({ top: -scrollDelta, behavior: 'smooth' });
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault();
+                    target.scrollBy({ top: scrollDelta, behavior: 'smooth' });
+                    break;
+                case 'PageUp':
+                    e.preventDefault();
+                    target.scrollBy({ top: -target.clientHeight * 0.8, behavior: 'smooth' });
+                    break;
+                case 'PageDown':
+                    e.preventDefault();
+                    target.scrollBy({ top: target.clientHeight * 0.8, behavior: 'smooth' });
+                    break;
+                case 'Home':
+                    e.preventDefault();
+                    target.scrollTo({ top: 0, behavior: 'smooth' });
+                    break;
+                case 'End':
+                    e.preventDefault();
+                    target.scrollTo({ top: target.scrollHeight, behavior: 'smooth' });
+                    break;
+            }
+        });
+    </script>
 </body>
 </html>
