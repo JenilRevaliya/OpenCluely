@@ -11,4 +11,5 @@ bin/
 scripts/__pycache__/
 scripts/caps_led
 scripts/request_permissions
+scripts/system_audio_recorder
 .opencluely-firstrun-completed

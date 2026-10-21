@@ -107,8 +107,84 @@
       transition: all 0.15s ease;
     }
     .close-btn:hover {
-      background: rgba(255, 255, 255, 0.18);
-      color: #fff;
+      background: rgba(239, 68, 68, 0.2);
+      color: #ef4444;
+      border-color: rgba(239, 68, 68, 0.4);
+    }
+
+    /* ── Close Button 3-Second Hover Dwell Ring ── */
+    .close-dwell-ring {
+      position: absolute;
+      inset: -2px;
+      pointer-events: none;
+      display: none;
+    }
+    .close-btn.dwelling .close-dwell-ring {
+      display: block;
+    }
+    .close-dwell-svg {
+      width: 100%;
+      height: 100%;
+      transform: rotate(-90deg);
+    }
+    .close-dwell-bg {
+      fill: none;
+      stroke: rgba(255, 255, 255, 0.18);
+      stroke-width: 8;
+    }
+    .close-dwell-bar {
+      fill: none;
+      stroke: #ef4444;
+      stroke-width: 9;
+      stroke-linecap: round;
+      transition: stroke-dashoffset 0.04s linear;
+    }
+    .close-btn.dwell-fired {
+      animation: target-close-flash 0.3s ease;
+    }
+    @keyframes target-close-flash {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.15); background: #ef4444; color: #fff; }
+      100% { transform: scale(1); }
+    }
+
+    /* ── Alternate Theme: Light Mode (Stealth on White Backgrounds) ── */
+    body.theme-light .box-container {
+      border: 1px dashed rgba(0, 0, 0, 0.35);
+      background: rgba(0, 0, 0, 0.015);
+    }
+    body.theme-light .toolbar {
+      background: rgba(255, 255, 255, 0.88);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+      color: #0f172a;
+    }
+    body.theme-light .btn {
+      background: rgba(0, 0, 0, 0.05);
+      color: #0f172a;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+    }
+    body.theme-light .btn:hover {
+      background: rgba(0, 0, 0, 0.1);
+    }
+    body.theme-light .segmented-switch {
+      background: rgba(0, 0, 0, 0.05);
+      border: 1px solid rgba(0, 0, 0, 0.1);
+    }
+    body.theme-light .switch-option {
+      color: rgba(15, 23, 42, 0.6);
+    }
+    body.theme-light .switch-option.active {
+      background: rgba(255, 255, 255, 0.95);
+      color: #0f172a;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+    body.theme-light .close-btn {
+      background: rgba(0, 0, 0, 0.05);
+      color: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(0, 0, 0, 0.1);
+    }
+    body.theme-light .close-dwell-bg {
+      stroke: rgba(0, 0, 0, 0.12);
     }
   </style>
 </head>

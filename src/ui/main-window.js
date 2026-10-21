@@ -10,7 +10,7 @@ class MainWindowUI {
     constructor() {
         this.isInteractive = true;
         this.isHidden = false;
-        this.currentSkill = 'dsa'; // Default, will be updated from settings
+        this.currentSkill = 'interview'; // Default to Interview (Jenil Soni resume mode)
         this.isMcqMode = false;
         this.isTyping = false;
         this.statusDot = null;
@@ -44,8 +44,12 @@ class MainWindowUI {
         
         // Define available skills for navigation
         this.availableSkills = [
+            'interview',
             'dsa'
         ];
+        this.audioSourceMode = 'system'; // 'system' (interviewer bot voice) or 'microphone'
+        this.audioSourceToggle = null;
+        this.audioSourceIcon = null;
         
         this.init();
     }
@@ -72,6 +76,9 @@ class MainWindowUI {
 
             // Load Rubic state
             await this.loadRubicState();
+
+            // Load Audio Source Mode (System Audio vs Mic)
+            await this.loadAudioSourceMode();
 
             // Start AI status polling
             this.startAiStatusPolling();
@@ -312,6 +319,11 @@ class MainWindowUI {
         if (!this.autoHideToggle) return;
         if (this.isAutoHideMode) {
             this.autoHideToggle.classList.add('autohide-active');
+            if (typeof this.closeLanguageDropdown === 'function') {
+                this.closeLanguageDropdown();
+            }
+            if (this.shortcutsPopover) this.shortcutsPopover.classList.remove('is-open');
+            if (this.clipboardPopover) this.clipboardPopover.classList.remove('is-open');
         } else {
             this.autoHideToggle.classList.remove('autohide-active');
         }
@@ -408,6 +420,13 @@ class MainWindowUI {
                     height = Math.max(height, Math.ceil(rect.height + popRect.height + 16));
                     width = Math.max(width, Math.ceil(popRect.right + 16));
                 }
+
+                // If language dropdown is visible, extend height and width to fit it
+                if (this.languageDropdownList && this.languageDropdownList.classList.contains('is-open')) {
+                    const dropRect = this.languageDropdownList.getBoundingClientRect();
+                    height = Math.max(height, Math.ceil(rect.height + dropRect.height + 16));
+                    width = Math.max(width, Math.ceil(dropRect.right + 16));
+                }
                 
                 logger.debug('Resizing window to content', {
                     width,
@@ -426,6 +445,10 @@ class MainWindowUI {
         this.skillIndicator = document.getElementById('skillIndicator');
         this.settingsIndicator = document.getElementById('settingsIndicator'); // Optional
         this.micButton = document.getElementById('micButton');
+        this.languageSelector = document.getElementById('languageSelector');
+        this.currentLanguageLabel = document.getElementById('currentLanguageLabel');
+        this.languageDropdownList = document.getElementById('languageDropdownList');
+        this.languageSelect = document.getElementById('codingLanguage');
         this.infoButton = document.getElementById('infoButton');
         this.shortcutsPopover = document.getElementById('shortcutsPopover');
         this.screenshotButton = document.getElementById('screenshotButton') || document.querySelector('.command-item');
@@ -438,6 +461,9 @@ class MainWindowUI {
         this.targetModeBtn = document.getElementById('targetModeBtn');
         this.clipboardHistoryBtn = document.getElementById('clipboardHistoryBtn');
         this.clipboardPopover = document.getElementById('clipboardPopover');
+        this.hoverDragProgressBar = document.getElementById('hoverDragProgressBar');
+        this.hoverDragProgressFill = document.getElementById('hoverDragProgressFill');
+        this.hoverDragStatusBadge = document.getElementById('hoverDragStatusBadge');
 
         // Apply saved proportional scale on startup
         const initialScale = Math.min(1.0, Math.max(0.55, parseFloat(localStorage.getItem('userBarScale') || '1.0')));
@@ -475,6 +501,7 @@ class MainWindowUI {
         this.expandBarBtn = document.getElementById('expandBarBtn');
         this.expandBarIcon = document.getElementById('expandBarIcon');
         this.extendedToolsGroup = document.getElementById('extendedToolsGroup');
+        this.extendedPrefixGroup = document.getElementById('extendedPrefixGroup');
         this.isBarExpanded = localStorage.getItem('barExpanded') === 'true'; // default false (minimal MCQ mode)
 
         this.applyBarMode = () => {
@@ -724,14 +751,22 @@ class MainWindowUI {
 
         // Opacity / Transparency slider handler
         if (this.opacitySlider) {
-            // Apply initial opacity (default is max transparency = 15%)
+            const savedOpacityVal = localStorage.getItem('userOpacityVal');
+            if (savedOpacityVal !== null) {
+                this.opacitySlider.value = savedOpacityVal;
+            }
             let val = parseInt(this.opacitySlider.value, 10);
-            let opacity = Math.max(0.005, Math.pow(val / 100, 2));
+            let opacity = Math.max(0.20, Math.min(1.0, val / 100));
             document.body.style.opacity = opacity.toString();
+            // Broadcast initial opacity so all auxiliary windows are synced immediately
+            if (window.electronAPI && window.electronAPI.setOpacity) {
+                window.electronAPI.setOpacity(opacity);
+            }
 
             this.opacitySlider.addEventListener('input', (e) => {
                 const val = parseInt(e.target.value, 10);
-                const opacity = Math.max(0.005, Math.pow(val / 100, 2));
+                localStorage.setItem('userOpacityVal', val.toString());
+                const opacity = Math.max(0.20, Math.min(1.0, val / 100));
                 document.body.style.opacity = opacity.toString();
                 if (window.electronAPI && window.electronAPI.setOpacity) {
                     window.electronAPI.setOpacity(opacity);
@@ -741,7 +776,26 @@ class MainWindowUI {
             this.opacitySlider.addEventListener('mousedown', (e) => e.stopPropagation());
         }
 
-        // Corner resize handle (bottom-right) - Proportional Dimension Ratio Scaling
+        // Double-clicking on the bar (empty spaces, separators, in between buttons) quits the app cleanly
+        const commandTab = document.querySelector('.command-tab');
+        if (commandTab) {
+            commandTab.addEventListener('dblclick', (e) => {
+                // If clicked on an interactive control, ignore
+                const isControl = e.target.closest('.command-item, input, select, button, #barResizeHandle, .language-dropdown-list, .rubic-toggles, .opacity-control');
+                if (!isControl) {
+                    logger.info('Double-click on bar background detected -> Quitting app');
+                    if (window.electronAPI && window.electronAPI.quitApp) {
+                        window.electronAPI.quitApp();
+                    } else if (window.electronAPI && window.electronAPI.quit) {
+                        window.electronAPI.quit();
+                    } else if (window.api && window.api.send) {
+                        window.api.send('quit-app');
+                    }
+                }
+            });
+        }
+
+        // Corner resize handle (bottom-right) - Supports proportional scale on mousedown AND 3s hover-dwell cursor drag
         this.barResizeHandle = document.getElementById('barResizeHandle');
         if (this.barResizeHandle) {
             let isResizing = false;
@@ -754,11 +808,9 @@ class MainWindowUI {
                 moveEvent.preventDefault();
                 const deltaX = moveEvent.screenX - startX;
                 const deltaY = moveEvent.screenY - startY;
-                // Dragging right/down increases scale up to 1.0; dragging left/up decreases scale down to 0.55
                 const delta = (deltaX * 0.7) + (deltaY * 0.3);
                 const deltaScale = delta / 260;
                 let newScale = startScale + deltaScale;
-                // Maximum size is the current size (1.0), but can scale smaller down to 0.55
                 newScale = Math.min(1.0, Math.max(0.55, Math.round(newScale * 100) / 100));
 
                 const cmdTab = document.querySelector('.command-tab');
@@ -786,9 +838,74 @@ class MainWindowUI {
                 this.resizeWindowToContent();
             };
 
+            // --- Stealth Hover-Dwell Drag & Drop (Zero-click, 3s hover to pick up, 3s dwell to drop) ---
+            let isHooked = false;
+            let hoverStartTime = null;
+            let hoverAnimFrame = null;
+            const dwellDuration = 3000;
+
+            const cancelHoverHook = () => {
+                if (isHooked) return;
+                if (hoverAnimFrame) {
+                    cancelAnimationFrame(hoverAnimFrame);
+                    hoverAnimFrame = null;
+                }
+                hoverStartTime = null;
+                if (this.hoverDragProgressBar) this.hoverDragProgressBar.classList.remove('is-visible');
+                if (this.hoverDragStatusBadge) this.hoverDragStatusBadge.classList.remove('is-visible');
+                if (this.hoverDragProgressFill) this.hoverDragProgressFill.style.width = '0%';
+            };
+
+            const startHoverHook = () => {
+                if (isHooked || isResizing) return;
+                hoverStartTime = performance.now();
+                if (this.hoverDragProgressBar) this.hoverDragProgressBar.classList.add('is-visible');
+                if (this.hoverDragStatusBadge) {
+                    this.hoverDragStatusBadge.textContent = 'Hold 3s to pick up...';
+                    this.hoverDragStatusBadge.classList.add('is-visible');
+                }
+
+                const animate = () => {
+                    if (isHooked || isResizing || !hoverStartTime) return;
+                    const elapsed = performance.now() - hoverStartTime;
+                    const progress = Math.min(elapsed / dwellDuration, 1.0);
+
+                    if (this.hoverDragProgressFill) {
+                        this.hoverDragProgressFill.style.width = `${progress * 100}%`;
+                    }
+
+                    if (progress >= 1.0) {
+                        isHooked = true;
+                        hoverStartTime = null;
+                        const commandTab = document.querySelector('.command-tab');
+                        if (commandTab) commandTab.classList.add('is-hooked-dragging');
+
+                        if (this.hoverDragProgressFill) {
+                            this.hoverDragProgressFill.style.width = '0%';
+                        }
+                        if (this.hoverDragStatusBadge) {
+                            this.hoverDragStatusBadge.textContent = 'Moving with cursor... hold still 3s to place';
+                        }
+
+                        if (window.electronAPI && window.electronAPI.startHoverDrag) {
+                            window.electronAPI.startHoverDrag();
+                        }
+                        return;
+                    }
+
+                    hoverAnimFrame = requestAnimationFrame(animate);
+                };
+
+                hoverAnimFrame = requestAnimationFrame(animate);
+            };
+
+            this.barResizeHandle.addEventListener('mouseenter', startHoverHook);
+            this.barResizeHandle.addEventListener('mouseleave', cancelHoverHook);
+
             this.barResizeHandle.addEventListener('mousedown', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                cancelHoverHook();
                 isResizing = true;
                 startX = e.screenX;
                 startY = e.screenY;
@@ -798,6 +915,53 @@ class MainWindowUI {
                 document.addEventListener('mousemove', onMouseMove);
                 document.addEventListener('mouseup', onMouseUp);
             });
+
+            // Listen to main process cursor tracking status during drag
+            if (window.electronAPI && window.electronAPI.onHoverDragStatus) {
+                window.electronAPI.onHoverDragStatus((status) => {
+                    if (!isHooked) return;
+                    if (status.isStationary) {
+                        if (this.hoverDragProgressFill) {
+                            this.hoverDragProgressFill.style.width = `${status.progress * 100}%`;
+                        }
+                        if (this.hoverDragStatusBadge) {
+                            const remaining = Math.max(1, Math.ceil(3 * (1 - status.progress)));
+                            this.hoverDragStatusBadge.textContent = `Placing in ${remaining}s...`;
+                        }
+                    } else {
+                        if (this.hoverDragProgressFill) {
+                            this.hoverDragProgressFill.style.width = '0%';
+                        }
+                        if (this.hoverDragStatusBadge) {
+                            this.hoverDragStatusBadge.textContent = 'Moving with cursor... hold still 3s to place';
+                        }
+                    }
+                });
+            }
+
+            // Listen to unhook event when 3s dwell at new location completes
+            if (window.electronAPI && window.electronAPI.onHoverDragUnhooked) {
+                window.electronAPI.onHoverDragUnhooked((pos) => {
+                    isHooked = false;
+                    const commandTab = document.querySelector('.command-tab');
+                    if (commandTab) commandTab.classList.remove('is-hooked-dragging');
+
+                    if (this.hoverDragProgressFill) {
+                        this.hoverDragProgressFill.style.width = '100%';
+                    }
+                    if (this.hoverDragStatusBadge) {
+                        this.hoverDragStatusBadge.textContent = '✓ Locked & Saved';
+                    }
+
+                    setTimeout(() => {
+                        if (!isHooked) {
+                            if (this.hoverDragProgressBar) this.hoverDragProgressBar.classList.remove('is-visible');
+                            if (this.hoverDragStatusBadge) this.hoverDragStatusBadge.classList.remove('is-visible');
+                            if (this.hoverDragProgressFill) this.hoverDragProgressFill.style.width = '0%';
+                        }
+                    }, 800);
+                });
+            }
         }
 
         // Instant mouse leave listener for auto-hide and context menu
@@ -831,17 +995,21 @@ class MainWindowUI {
             });
         }
 
-        // Skill indicator click handler toggles DSA skill
-        this.skillIndicator.addEventListener('click', () => {
-            const newSkill = 'dsa';
+        // Skill indicator click & hover handler cycles DSA and Interview skills
+        const toggleSkillAction = () => {
+            const nextSkill = this.currentSkill === 'dsa' ? 'interview' : 'dsa';
             if (window.electronAPI && window.electronAPI.updateActiveSkill) {
-                window.electronAPI.updateActiveSkill(newSkill).then(() => {
-                    this.handleSkillActivated(newSkill);
+                window.electronAPI.updateActiveSkill(nextSkill).then(() => {
+                    this.handleSkillActivated(nextSkill);
                 });
             } else {
-                this.handleSkillActivated(newSkill);
+                this.handleSkillActivated(nextSkill);
             }
-        });
+        };
+        this.skillIndicator.addEventListener('click', toggleSkillAction);
+        if (window.RubicHoverDwell) {
+            window.RubicHoverDwell.attach(this.skillIndicator, toggleSkillAction);
+        }
 
         // Check for required elements (settingsIndicator is optional)
         if (this.settingsIndicator) {
@@ -879,37 +1047,11 @@ class MainWindowUI {
             window.RubicHoverDwell.attach(this.micButton, toggleMicAction);
         }
 
-        // Language dropdown
-        this.languageSelect = document.getElementById('codingLanguage');
-        if (this.languageSelect) {
-            // Set default to C++ if no value is set
-            this.languageSelect.value = 'cpp';
-            
-            // Initialize with current setting
-            if (window.electronAPI && window.electronAPI.getSettings) {
-                window.electronAPI.getSettings().then(settings => {
-                    if (settings && settings.codingLanguage) {
-                        this.languageSelect.value = settings.codingLanguage;
-                    } else {
-                        // Save C++ as default if no language is set
-                        this.languageSelect.value = 'cpp';
-                        window.electronAPI.saveSettings({ codingLanguage: 'cpp' });
-                    }
-                }).catch(() => {
-                    // Fallback to C++ on error
-                    this.languageSelect.value = 'cpp';
-                });
-            }
+        // Language custom dropdown with 3-second hover dwell selection
+        this.setupLanguageSelector();
 
-            this.languageSelect.addEventListener('change', (e) => {
-                const lang = e.target.value;
-                if (window.electronAPI && window.electronAPI.saveSettings) {
-                    window.electronAPI.saveSettings({ codingLanguage: lang });
-                }
-                // Resize for any width change
-                this.resizeWindowToContent();
-            });
-        }
+        // Theme toggle (Dark / Light) with click and 3s hover dwell
+        this.setupThemeToggle();
 
         // Info button / shortcuts popover (Click only, no hover)
         if (this.infoButton && this.shortcutsPopover) {
@@ -953,7 +1095,14 @@ class MainWindowUI {
         if (window.electronAPI) {
             if (window.electronAPI.onOpacityUpdate) {
                 window.electronAPI.onOpacityUpdate((event, opacity) => {
-                    document.body.style.opacity = opacity.toString();
+                    const num = typeof opacity === 'number' ? opacity : parseFloat(opacity);
+                    if (!isNaN(num)) {
+                        document.body.style.opacity = num.toString();
+                        if (this.opacitySlider) {
+                            this.opacitySlider.value = Math.round(num * 100).toString();
+                            localStorage.setItem('userOpacityVal', this.opacitySlider.value);
+                        }
+                    }
                 });
             }
             if (window.electronAPI.onToggleClipboardPopover) {
@@ -986,13 +1135,16 @@ class MainWindowUI {
                 this.applyMicVisibility();
             });
 
+            if (window.electronAPI.onAudioSourceModeChanged) {
+                window.electronAPI.onAudioSourceModeChanged(({ mode }) => {
+                    this.setAudioSourceModeUI(mode);
+                });
+            }
+
             // Listen for coding language changes from other windows
             window.electronAPI.onCodingLanguageChanged((event, data) => {
-                if (data && data.language && this.languageSelect) {
-                    // avoid clobbering if same value
-                    if (this.languageSelect.value !== data.language) {
-                        this.languageSelect.value = data.language;
-                    }
+                if (data && data.language) {
+                    this.updateLanguageUI(data.language);
                     logger.debug('Language updated from other window', {
                         component: 'MainWindowUI',
                         language: data.language
@@ -1269,11 +1421,47 @@ class MainWindowUI {
     handleSkillActivated(skillName) {
         this.currentSkill = skillName;
         this.updateSkillIndicator();
+        if (skillName === 'interview') {
+            this.setAudioSourceModeUI('system');
+            if (window.electronAPI && window.electronAPI.setAudioSourceMode) {
+                window.electronAPI.setAudioSourceMode('system').catch(() => {});
+            }
+        }
         
         logger.info('Skill activated', {
             component: 'MainWindowUI',
             skill: skillName
         });
+    }
+
+    setAudioSourceModeUI(mode) {
+        this.audioSourceMode = mode === 'microphone' ? 'microphone' : 'system';
+        if (this.audioSourceToggle) {
+            if (this.audioSourceMode === 'system') {
+                this.audioSourceToggle.classList.add('active');
+                this.audioSourceToggle.title = 'Audio Source: System Audio (Interviewer Bot Speech) - Click for Mic';
+                if (this.audioSourceIcon) {
+                    this.audioSourceIcon.className = 'fas fa-volume-high';
+                }
+            } else {
+                this.audioSourceToggle.classList.remove('active');
+                this.audioSourceToggle.title = 'Audio Source: Microphone (Candidate Voice) - Click for System Audio';
+                if (this.audioSourceIcon) {
+                    this.audioSourceIcon.className = 'fas fa-microphone-lines';
+                }
+            }
+        }
+    }
+
+    async loadAudioSourceMode() {
+        if (window.electronAPI && window.electronAPI.getAudioSourceMode) {
+            try {
+                const mode = await window.electronAPI.getAudioSourceMode();
+                if (mode) {
+                    this.setAudioSourceModeUI(mode);
+                }
+            } catch (_) {}
+        }
     }
 
     handleScreenshotRequest() {
@@ -1310,23 +1498,318 @@ class MainWindowUI {
         logger.debug('Recording stopped', { component: 'MainWindowUI' });
     }
 
+    setupLanguageSelector() {
+        if (!this.languageSelector || !this.languageDropdownList) return;
+
+        // Initialize with saved settings
+        if (window.electronAPI && window.electronAPI.getSettings) {
+            window.electronAPI.getSettings().then(settings => {
+                const lang = (settings && settings.codingLanguage) ? settings.codingLanguage : 'cpp';
+                this.updateLanguageUI(lang);
+            }).catch(() => {
+                this.updateLanguageUI('cpp');
+            });
+        } else {
+            this.updateLanguageUI('cpp');
+        }
+
+        // Toggle dropdown open/closed
+        const toggleDropdown = () => {
+            if (!this.isInteractive) return;
+            const isOpen = this.languageDropdownList.classList.contains('is-open');
+            if (isOpen) {
+                this.closeLanguageDropdown();
+            } else {
+                this.openLanguageDropdown();
+            }
+        };
+
+        this.languageSelector.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleDropdown();
+        });
+
+        if (window.RubicHoverDwell) {
+            // Hover-dwell on selector header ONLY opens the menu, never closes it while user is deciding!
+            window.RubicHoverDwell.attach(this.languageSelector, () => {
+                if (!this.isInteractive) return;
+                if (!this.languageDropdownList.classList.contains('is-open')) {
+                    this.openLanguageDropdown();
+                }
+            });
+        }
+
+        // Wire each language option with both click AND 3-second hover dwell selection!
+        const options = this.languageDropdownList.querySelectorAll('.language-option');
+        options.forEach(opt => {
+            const langVal = opt.getAttribute('data-value');
+            let dwellAnimId = null;
+            let dwellStartTime = null;
+            const dwellDuration = 3000; // 3 seconds hover to select
+
+            const cancelDwell = () => {
+                if (dwellAnimId) {
+                    cancelAnimationFrame(dwellAnimId);
+                    dwellAnimId = null;
+                }
+                dwellStartTime = null;
+                opt.classList.remove('dwelling');
+                const fill = opt.querySelector('.lang-dwell-fill');
+                if (fill) fill.style.width = '0%';
+            };
+
+            const startDwell = () => {
+                cancelDwell();
+                if (window.RubicHoverDwell) {
+                    window.RubicHoverDwell.cancelAll();
+                }
+                options.forEach(other => {
+                    if (other !== opt) {
+                        other.classList.remove('dwelling');
+                        const f = other.querySelector('.lang-dwell-fill');
+                        if (f) f.style.width = '0%';
+                    }
+                });
+
+                dwellStartTime = performance.now();
+                opt.classList.add('dwelling');
+                const fill = opt.querySelector('.lang-dwell-fill');
+
+                const step = (now) => {
+                    if (!dwellStartTime) return;
+                    const elapsed = now - dwellStartTime;
+                    const progress = Math.min(elapsed / dwellDuration, 1);
+                    if (fill) {
+                        fill.style.width = `${progress * 100}%`;
+                    }
+                    if (progress >= 1) {
+                        cancelDwell();
+                        logger.info('Language selected via 3-second hover dwell:', langVal);
+                        this.selectLanguage(langVal);
+                        return;
+                    }
+                    dwellAnimId = requestAnimationFrame(step);
+                };
+                dwellAnimId = requestAnimationFrame(step);
+            };
+
+            opt.addEventListener('click', (e) => {
+                e.stopPropagation();
+                cancelDwell();
+                this.selectLanguage(langVal);
+            });
+
+            opt.addEventListener('mouseenter', (e) => {
+                e.stopPropagation();
+                startDwell();
+            });
+
+            opt.addEventListener('mouseleave', (e) => {
+                e.stopPropagation();
+                cancelDwell();
+            });
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (this.languageDropdownList && this.languageDropdownList.classList.contains('is-open')) {
+                const isClickInside = this.languageSelector.contains(e.target) || this.languageDropdownList.contains(e.target);
+                if (!isClickInside) {
+                    this.closeLanguageDropdown();
+                }
+            }
+        });
+    }
+
+    getLanguageDisplayName(lang) {
+        const langDisplayNames = {
+            cpp: 'C++',
+            c: 'C',
+            python: 'Python',
+            java: 'Java',
+            javascript: 'JavaScript'
+        };
+        return langDisplayNames[lang] || 'C++';
+    }
+
+    updateLanguageUI(lang) {
+        const displayName = this.getLanguageDisplayName(lang);
+        if (this.currentLanguageLabel) {
+            this.currentLanguageLabel.textContent = displayName;
+        }
+        if (this.languageSelect) {
+            this.languageSelect.value = lang;
+        }
+        if (this.languageDropdownList) {
+            const options = this.languageDropdownList.querySelectorAll('.language-option');
+            options.forEach(opt => {
+                if (opt.getAttribute('data-value') === lang) {
+                    opt.classList.add('active');
+                } else {
+                    opt.classList.remove('active');
+                }
+            });
+        }
+        this.resizeWindowToContent();
+    }
+
+    selectLanguage(lang) {
+        this.updateLanguageUI(lang);
+        if (window.electronAPI && window.electronAPI.saveSettings) {
+            window.electronAPI.saveSettings({ codingLanguage: lang });
+        }
+        this.closeLanguageDropdown();
+    }
+
+    openLanguageDropdown() {
+        if (!this.languageDropdownList) return;
+        if (window.RubicHoverDwell) window.RubicHoverDwell.cancelAll();
+        this.languageDropdownList.classList.add('is-open');
+        if (this.languageSelector) this.languageSelector.classList.add('is-open');
+        this.resizeWindowToContent();
+    }
+
+    closeLanguageDropdown() {
+        if (!this.languageDropdownList) return;
+        this.languageDropdownList.classList.remove('is-open');
+        if (this.languageSelector) this.languageSelector.classList.remove('is-open');
+        // Reset dwell animation state on all options
+        const fills = this.languageDropdownList.querySelectorAll('.lang-dwell-fill');
+        fills.forEach(f => { f.style.width = '0%'; });
+        const options = this.languageDropdownList.querySelectorAll('.language-option');
+        options.forEach(opt => opt.classList.remove('dwelling'));
+        this.resizeWindowToContent();
+    }
+
+    setupThemeToggle() {
+        this.themeToggleBtn = document.getElementById('themeToggleBtn');
+        this.themeToggleIcon = document.getElementById('themeToggleIcon');
+        if (!this.themeToggleBtn) return;
+
+        const applyTheme = (theme) => {
+            const isLight = theme === 'light';
+            const commandTab = document.querySelector('.command-tab');
+            if (isLight) {
+                document.body.classList.add('theme-light');
+                if (commandTab) commandTab.classList.add('theme-light');
+                if (this.themeToggleIcon) {
+                    this.themeToggleIcon.className = 'fas fa-moon';
+                }
+            } else {
+                document.body.classList.remove('theme-light');
+                if (commandTab) commandTab.classList.remove('theme-light');
+                if (this.themeToggleIcon) {
+                    this.themeToggleIcon.className = 'fas fa-sun';
+                }
+            }
+        };
+
+        const toggleTheme = () => {
+            if (!this.isInteractive) return;
+            const currentTheme = document.body.classList.contains('theme-light') ? 'light' : 'dark';
+            const nextTheme = currentTheme === 'light' ? 'dark' : 'light';
+            applyTheme(nextTheme);
+            localStorage.setItem('userTheme', nextTheme);
+            if (window.electronAPI && window.electronAPI.setTheme) {
+                window.electronAPI.setTheme(nextTheme);
+            }
+        };
+
+        // Initialize from localStorage or electron
+        const savedTheme = localStorage.getItem('userTheme') || 'dark';
+        applyTheme(savedTheme);
+        if (window.electronAPI && window.electronAPI.setTheme) {
+            window.electronAPI.setTheme(savedTheme);
+        }
+
+        this.themeToggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleTheme();
+        });
+
+        if (window.RubicHoverDwell) {
+            window.RubicHoverDwell.attach(this.themeToggleBtn, toggleTheme);
+        }
+
+        if (window.electronAPI && window.electronAPI.onThemeChanged) {
+            window.electronAPI.onThemeChanged((event, theme) => {
+                applyTheme(theme);
+            });
+        }
+    }
+
     /**
      * Capture microphone audio in the renderer using the Web Audio API.
-     * This is used for Whisper on Windows where node-record-lpcm16's sox/rec
-     * dependencies are unavailable.
+     * This is used for Whisper on Windows and macOS where renderer getUserMedia
+     * handles TCC audio intake cleanly.
      */
     async _startRendererAudioCapture() {
         try {
             this._stopRendererAudioCapture();
 
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: { ideal: 16000 }
+            let stream = null;
+            const platform = (typeof navigator !== 'undefined' &&
+              ((navigator.userAgentData && navigator.userAgentData.platform) ||
+                navigator.platform || '')).toLowerCase();
+            const isWindows = platform.includes('win');
+
+            // In system mode (interviewer bot speech), attempt direct internal desktop audio capture
+            if (this.audioSourceMode === 'system') {
+                try {
+                    if (window.electronAPI && window.electronAPI.getDesktopSources) {
+                        const sources = await window.electronAPI.getDesktopSources();
+                        if (sources && sources.length > 0) {
+                            const screenSource = sources[0];
+                            const desktopStream = await navigator.mediaDevices.getUserMedia({
+                                audio: {
+                                    mandatory: {
+                                        chromeMediaSource: 'desktop',
+                                        chromeMediaSourceId: screenSource.id
+                                    }
+                                },
+                                video: {
+                                    mandatory: {
+                                        chromeMediaSource: 'desktop',
+                                        chromeMediaSourceId: screenSource.id
+                                    }
+                                }
+                            });
+                            if (desktopStream && desktopStream.getAudioTracks().length > 0) {
+                                desktopStream.getVideoTracks().forEach(track => track.stop());
+                                stream = desktopStream;
+                                logger.info('Direct internal desktop system audio captured successfully (undetected)', {
+                                    component: 'MainWindowUI'
+                                });
+                            } else if (desktopStream) {
+                                desktopStream.getTracks().forEach(t => t.stop());
+                            }
+                        }
+                    }
+                } catch (desktopErr) {
+                    logger.warn('Direct desktop audio stream unavailable, falling back to speaker intake', {
+                        component: 'MainWindowUI',
+                        error: desktopErr.message
+                    });
                 }
-            });
+            }
+
+            // Capture speaker/voice via microphone without AEC & noise suppression
+            // so interviewer voice coming from speakers is cleanly captured!
+            if (!stream || stream.getAudioTracks().length === 0) {
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            echoCancellation: false,
+                            noiseSuppression: false,
+                            autoGainControl: true
+                        }
+                    });
+                } catch (e1) {
+                    logger.warn('AEC-free audio intake failed, falling back to default mic', { error: e1.message });
+                    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                }
+            }
+
             this._mediaStream = stream;
 
             const audioContext = new (window.AudioContext || window.webkitAudioContext)({
@@ -1334,11 +1817,17 @@ class MainWindowUI {
             });
             this._audioContext = audioContext;
 
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+
             const source = audioContext.createMediaStreamSource(stream);
+            this._audioSource = source;
             const bufferSize = 4096;
             const scriptNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
             this._scriptNode = scriptNode;
 
+            let chunkCount = 0;
             scriptNode.onaudioprocess = (event) => {
                 if (!this.isRecording || !window.electronAPI || !window.electronAPI.sendAudioChunk) {
                     return;
@@ -1349,22 +1838,66 @@ class MainWindowUI {
                     const s = Math.max(-1, Math.min(1, inputData[i]));
                     pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                 }
+                chunkCount++;
+                if (chunkCount === 1) {
+                    logger.info('Live audio stream active: first chunk transmitted to Whisper engine');
+                }
                 window.electronAPI.sendAudioChunk(pcm16.buffer);
             };
 
-            source.connect(scriptNode);
-            scriptNode.connect(audioContext.destination);
+            // Connect scriptNode through a zero-gain node to audioContext.destination
+            // so the Web Audio pipeline runs continuously without feedback to the speakers
+            const muteGain = audioContext.createGain();
+            muteGain.gain.value = 0;
+            this._muteGain = muteGain;
 
-            logger.info('Renderer audio capture started', { component: 'MainWindowUI' });
+            source.connect(scriptNode);
+            scriptNode.connect(muteGain);
+            muteGain.connect(audioContext.destination);
+
+            logger.info('Renderer audio capture started successfully', {
+                component: 'MainWindowUI',
+                mode: this.audioSourceMode,
+                audioState: audioContext.state
+            });
         } catch (error) {
             logger.error('Failed to start renderer audio capture', {
                 component: 'MainWindowUI',
                 error: error.message
             });
-            // Notify main process so it can stop the recording state
+            // Try resilient fallback to basic microphone before giving up
             try {
-                await window.electronAPI.stopSpeechRecognition();
-            } catch (_) { /* ignore */ }
+                const fallbackStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                this._mediaStream = fallbackStream;
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                this._audioContext = audioContext;
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+                const source = audioContext.createMediaStreamSource(fallbackStream);
+                this._audioSource = source;
+                const scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+                this._scriptNode = scriptNode;
+                scriptNode.onaudioprocess = (event) => {
+                    if (!this.isRecording || !window.electronAPI || !window.electronAPI.sendAudioChunk) return;
+                    const inputData = event.inputBuffer.getChannelData(0);
+                    const pcm16 = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                        const s = Math.max(-1, Math.min(1, inputData[i]));
+                        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+                    window.electronAPI.sendAudioChunk(pcm16.buffer);
+                };
+                const muteGain = audioContext.createGain();
+                muteGain.gain.value = 0;
+                this._muteGain = muteGain;
+                source.connect(scriptNode);
+                scriptNode.connect(muteGain);
+                muteGain.connect(audioContext.destination);
+                logger.info('Resilient basic audio capture connected', { component: 'MainWindowUI', audioState: audioContext.state });
+            } catch (fallbackErr) {
+                logger.error('Fallback audio capture also failed', { component: 'MainWindowUI', error: fallbackErr.message });
+            }
         }
     }
 
@@ -1374,6 +1907,14 @@ class MainWindowUI {
                 this._scriptNode.disconnect();
                 this._scriptNode.onaudioprocess = null;
                 this._scriptNode = null;
+            }
+            if (this._muteGain) {
+                this._muteGain.disconnect();
+                this._muteGain = null;
+            }
+            if (this._audioSource) {
+                this._audioSource.disconnect();
+                this._audioSource = null;
             }
             if (this._mediaStream) {
                 this._mediaStream.getTracks().forEach((track) => track.stop());
@@ -1398,6 +1939,7 @@ class MainWindowUI {
     updateSkillIndicator() {
         const skillNames = {
             'dsa': 'DSA',
+            'interview': 'Interview',
             'behavioral': 'Behavioral', 
             'sales': 'Sales',
             'presentation': 'Presentation',
@@ -1431,6 +1973,10 @@ class MainWindowUI {
         if (skillSpan) {
             const oldText = skillSpan.textContent;
             skillSpan.textContent = skillName;
+            const skillIcon = this.skillIndicator.querySelector('i');
+            if (skillIcon) {
+                skillIcon.className = this.currentSkill === 'interview' ? 'fas fa-user-tie' : 'fas fa-brain';
+            }
                         
             // Add visual feedback for skill change
             this.animateSkillChange();
@@ -1793,7 +2339,7 @@ class MainWindowUI {
             document.body.removeChild(menu);
         });
 
-        const quitOption = this.createMenuItem('Quit OpenCluely', 'fa-power-off', () => {
+        const quitOption = this.createMenuItem('Quit', 'fa-power-off', () => {
             if (window.electronAPI && window.electronAPI.quit) {
                 window.electronAPI.quit();
             }

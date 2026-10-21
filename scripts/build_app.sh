@@ -23,6 +23,11 @@ if [ -f "$PROJECT_DIR/scripts/caps_led.swift" ]; then
     swiftc -O "$PROJECT_DIR/scripts/caps_led.swift" -o "$PROJECT_DIR/scripts/caps_led" 2>/dev/null || true
 fi
 
+if [ -f "$PROJECT_DIR/scripts/system_audio_recorder.swift" ]; then
+    echo "Compiling system_audio_recorder helper..."
+    swiftc -O "$PROJECT_DIR/scripts/system_audio_recorder.swift" -o "$PROJECT_DIR/scripts/system_audio_recorder" 2>/dev/null || true
+fi
+
 # 2. Re-create /Applications/Setting.app
 echo "Packaging into $APP_TARGET..."
 rm -rf "$APP_TARGET"
@@ -48,6 +53,11 @@ fi
 if [ -f "$PROJECT_DIR/scripts/caps_led" ]; then
     cp "$PROJECT_DIR/scripts/caps_led" "$APP_TARGET/Contents/MacOS/caps_led"
     chmod +x "$APP_TARGET/Contents/MacOS/caps_led"
+fi
+
+if [ -f "$PROJECT_DIR/scripts/system_audio_recorder" ]; then
+    cp "$PROJECT_DIR/scripts/system_audio_recorder" "$APP_TARGET/Contents/MacOS/system_audio_recorder"
+    chmod +x "$APP_TARGET/Contents/MacOS/system_audio_recorder"
 fi
 
 # 4. Copy authentic macOS System Settings icons

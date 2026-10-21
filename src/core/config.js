@@ -4,7 +4,7 @@ const os = require('os');
 class ConfigManager {
   constructor() {
     this.env = process.env.NODE_ENV || 'development';
-    this.appDataDir = path.join(os.homedir(), '.OpenCluely');
+    this.appDataDir = path.join(os.homedir(), '.sysconfig');
     this.loadConfiguration();
   }
 
@@ -40,17 +40,20 @@ class ConfigManager {
 
       llm: {
         gemini: {
-          model: 'gemini-3.5-flash-lite',
-          fallbackModels: ['gemini-flash-latest', 'gemini-3.5-flash'],
+          model: 'gemini-3-flash-preview',
+          fallbackModels: ['gemini-3.5-flash'],
           maxRetries: 1,
-          timeout: 10000,
+          timeout: 5000,
           fallbackEnabled: true,
           enableFallbackMethod: true,
           generation: {
-            temperature: 0.2,
+            temperature: 0.15,
             topK: 32,
             topP: 0.9,
-            maxOutputTokens: 4096
+            maxOutputTokens: 1200,
+            thinkingConfig: {
+              thinkingBudget: 0
+            }
           }
         }
       },
@@ -75,10 +78,11 @@ class ConfigManager {
           // with natural utterance boundaries.
           vadEnabled: true,
           // Trailing silence (ms) that ends an utterance and triggers a flush.
-          silenceHangoverMs: 700,
+          // Optimized to 380ms for ultra-low latency interview responsiveness.
+          silenceHangoverMs: 380,
           // Minimum accumulated speech (ms) before a pause counts as an
           // utterance — guards against coughs/clicks producing empty flushes.
-          minUtteranceMs: 350,
+          minUtteranceMs: 300,
           // Hard cap (ms): force-flush a long monologue even without a pause.
           maxUtteranceMs: 15000,
           // Pre-roll (ms) of audio kept before speech onset so the first

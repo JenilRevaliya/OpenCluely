@@ -8,11 +8,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Speech recognition
   startSpeechRecognition: () => ipcRenderer.invoke('start-speech-recognition'),
+  stopSpeechRecognition: () => ipcRenderer.invoke('stop-speech-recognition'),
   hideChatWindow: () => ipcRenderer.send('hide-chat-window'),
   toggleSpeechRecognition: () => ipcRenderer.send('toggle-speech-recognition'),
-  stopSpeechRecognition: () => ipcRenderer.invoke('stop-speech-recognition'),
   sendAudioChunk: (buffer) => ipcRenderer.send('audio-chunk', { buffer }),
   getSpeechAvailability: () => ipcRenderer.invoke('get-speech-availability'),
+  getDesktopSources: () => ipcRenderer.invoke('get-desktop-sources'),
+  setAudioSourceMode: (mode) => ipcRenderer.invoke('set-audio-source-mode', mode),
+  getAudioSourceMode: () => ipcRenderer.invoke('get-audio-source-mode'),
+  toggleAudioSourceMode: () => ipcRenderer.invoke('toggle-audio-source-mode'),
+  onAudioSourceModeChanged: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('audio-source-mode-changed', handler);
+    return () => ipcRenderer.removeListener('audio-source-mode-changed', handler);
+  },
   
   // Window management
   showAllWindows: () => ipcRenderer.invoke('show-all-windows'),
@@ -23,12 +32,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
   switchToSkills: () => ipcRenderer.invoke('switch-to-skills'),
   resizeWindow: (width, height) => ipcRenderer.invoke('resize-window', { width, height }),
   moveWindow: (deltaX, deltaY) => ipcRenderer.invoke('move-window', { deltaX, deltaY }),
+  startHoverDrag: () => ipcRenderer.invoke('start-hover-drag'),
+  stopHoverDrag: () => ipcRenderer.invoke('stop-hover-drag'),
+  onHoverDragStatus: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('hover-drag-status', handler);
+    return () => ipcRenderer.removeListener('hover-drag-status', handler);
+  },
+  onHoverDragUnhooked: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('hover-drag-unhooked', handler);
+    return () => ipcRenderer.removeListener('hover-drag-unhooked', handler);
+  },
   getWindowStats: () => ipcRenderer.invoke('get-window-stats'),
   
   // Session memory
   getSessionHistory: () => ipcRenderer.invoke('get-session-history'),
   getLLMSessionHistory: () => ipcRenderer.invoke('get-llm-session-history'),
   clearSessionMemory: () => ipcRenderer.invoke('clear-session-memory'),
+  clearSession: () => ipcRenderer.invoke('clear-session-memory'),
   formatSessionHistory: () => ipcRenderer.invoke('format-session-history'),
   sendChatMessage: (text) => ipcRenderer.invoke('send-chat-message', text),
   getSkillPrompt: (skillName) => ipcRenderer.invoke('get-skill-prompt', skillName),
@@ -128,7 +150,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showClipboard: () => ipcRenderer.invoke('show-clipboard'),
   onToggleClipboardPopover: (callback) => ipcRenderer.on('toggle-clipboard-popover', callback),
   setOpacity: (opacity) => ipcRenderer.send('set-opacity', opacity),
+  getOpacity: () => ipcRenderer.invoke('get-opacity'),
   onOpacityUpdate: (callback) => ipcRenderer.on('update-opacity', callback),
+  setTheme: (theme) => ipcRenderer.send('set-theme', theme),
+  getTheme: () => ipcRenderer.invoke('get-theme'),
+  onThemeChanged: (callback) => ipcRenderer.on('theme-changed', callback),
   showTargetBox: () => ipcRenderer.invoke('show-target-box'),
   extractTargetBox: (mode) => ipcRenderer.invoke('extract-target-box', mode),
   
@@ -148,16 +174,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onOcrError: (callback) => ipcRenderer.on('ocr-error', callback),
   onLlmResponse: (callback) => ipcRenderer.on('llm-response', callback),
   onLlmError: (callback) => ipcRenderer.on('llm-error', callback),
+  onLlmDebugStatus: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('llm-debug-status', handler);
+    return () => ipcRenderer.removeListener('llm-debug-status', handler);
+  },
+  getSystemDiagnostics: () => ipcRenderer.invoke('get-system-diagnostics'),
+  runLiveDiagnosticProbe: () => ipcRenderer.invoke('run-live-diagnostic-probe'),
   onTranscriptionLlmResponse: (callback) => ipcRenderer.on('transcription-llm-response', callback),
   onTranscriptionLlmResponseStart: (callback) => ipcRenderer.on('transcription-llm-response-start', callback),
   onTranscriptionLlmResponseChunk: (callback) => ipcRenderer.on('transcription-llm-response-chunk', callback),
   onOpenGeminiConfig: (callback) => ipcRenderer.on('open-gemini-config', callback),
   onDisplayLlmResponse: (callback) => ipcRenderer.on('display-llm-response', callback),
   onShowLoading: (callback) => ipcRenderer.on('show-loading', callback),
+  onBacktrackAnswer: (callback) => ipcRenderer.on('backtrack-answer', callback),
+  onInterimTranscription: (callback) => ipcRenderer.on('interim-transcription', callback),
+  onTranscription: (callback) => ipcRenderer.on('transcription', callback),
+  backtrackPrevious: () => ipcRenderer.invoke('backtrack-previous'),
+  backtrackNext: () => ipcRenderer.invoke('backtrack-next'),
   onSkillChanged: (callback) => ipcRenderer.on('skill-changed', callback),
   onInteractionModeChanged: (callback) => ipcRenderer.on('interaction-mode-changed', callback),
   onRecordingStarted: (callback) => ipcRenderer.on('recording-started', callback),
   onRecordingStopped: (callback) => ipcRenderer.on('recording-stopped', callback),
+  onMicReady: (callback) => ipcRenderer.on('mic-ready', callback),
+  onSpeechActive: (callback) => ipcRenderer.on('speech-active', callback),
   onCodingLanguageChanged: (callback) => ipcRenderer.on('coding-language-changed', callback),
   onMainWindowShown: (callback) => ipcRenderer.on('main-window-shown', callback),
   onMcqModeChanged: (callback) => ipcRenderer.on('mcq-mode-changed', callback),

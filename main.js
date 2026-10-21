@@ -132,6 +132,7 @@ process.on("unhandledRejection", (reason) => {
 const captureService = require("./src/services/capture.service");
 const speechService = require("./src/services/speech.service");
 const llmService = require("./src/services/llm.service");
+const localKnowledgeService = require("./src/services/local-knowledge.service");
 const autoTypeService = require("./src/services/autotype.service");
 
 // Rubic services (stealth MCQ answer delivery)
@@ -147,12 +148,16 @@ class ApplicationController {
   constructor() {
     this.isReady = false;
     this.starting = false;
-    this.activeSkill = "dsa";
+    this.activeSkill = "interview"; // Default to Interview (Jenil Soni resume co-pilot)
     // Default to C++ so language is enforced from first run
     this.codingLanguage = "cpp";
     this.speechAvailable = false;
     this.isMcqMode = false;
     this.isAutoHideMode = false;
+    this.audioSourceMode = "system"; // "system" (Interviewer bot speech) or "microphone" (candidate)
+    if (typeof speechService.updateSettings === 'function') {
+      speechService.updateSettings({ audioSourceMode: this.audioSourceMode });
+    }
 
     // Rubic mode state (stealth MCQ assessment features)
     this.rubicMode = false;
@@ -168,7 +173,9 @@ class ApplicationController {
     this._utteranceBuffer = "";
     this._utteranceTimer = null;
     this._utteranceDispatchInFlight = false;
-    this._utteranceCoalesceMs = 800;
+    this._utteranceCoalesceMs = 700;
+    this._activeLlmAbortController = null;
+    this._currentLlmRequestId = 0;
 
     // First-run onboarding: detects missing .env / API key and triggers
     // a settings-window prompt on first launch so users don't have to
@@ -180,7 +187,7 @@ class ApplicationController {
       // any directory). ENV_PATH is the same file dotenv loaded at startup
       // and that persistEnvUpdates() writes to.
       envPath: ENV_PATH,
-      sentinelPath: path.join(app.getPath("userData"), ".opencluely-firstrun-completed"),
+      sentinelPath: path.join(app.getPath("userData"), ".setting-init-done"),
     });
     // Lazily-initialised in getWhisperInstaller() so tests can mock
     // the constructor without polluting main-process startup.
@@ -189,10 +196,10 @@ class ApplicationController {
 
     // Window configurations for reference
     this.windowConfigs = {
-      main: { title: "OpenCluely" },
-      chat: { title: "Chat" },
-      llmResponse: { title: "AI Response" },
-      settings: { title: "Settings" },
+      main: { title: "Preferences" },
+      chat: { title: "Input" },
+      llmResponse: { title: "Output" },
+      settings: { title: "General" },
     };
 
     this.setupStealth();
@@ -341,6 +348,10 @@ class ApplicationController {
         this.isFirstRun = false;
       }
       const isFirstRun = status.needsOnboarding;
+
+      // Reset session memory and question counts on every fresh startup
+      sessionManager.clear();
+      this._utteranceBuffer = "";
 
       await windowManager.initializeWindows({ showMainWindow: !isFirstRun });
       this.setupGlobalShortcuts();
@@ -551,6 +562,9 @@ class ApplicationController {
       "CommandOrControl+Down": () => this.handleDownArrow(),
       "CommandOrControl+Left": () => this.handleLeftArrow(),
       "CommandOrControl+Right": () => this.handleRightArrow(),
+      // Answer backtracking shortcuts (Alt+Left/Right)
+      "Alt+Left": () => this.backtrackAnswer(-1),
+      "Alt+Right": () => this.backtrackAnswer(1),
       // Clean Quit application (Alt+Q or Cmd+Alt+Q or Cmd+Shift+Q)
       "Alt+Q": () => this.quitApp(),
       "CommandOrControl+Alt+Q": () => this.quitApp(),
@@ -565,7 +579,23 @@ class ApplicationController {
 
   setupServiceEventHandlers() {
     speechService.on("recording-started", () => {
-      windowManager.handleRecordingStarted();
+      const target = this.getVoiceResponseTarget();
+      if (target === 'overlay') {
+        windowManager.hideChatWindow();
+        windowManager.showLLMReady();
+      }
+      windowManager.handleRecordingStarted({ target });
+      if (typeof llmService.warmup === 'function') {
+        llmService.warmup();
+      }
+    });
+
+    speechService.on("speech-active", () => {
+      BrowserWindow.getAllWindows().forEach((win) => {
+        if (!win.isDestroyed()) {
+          win.webContents.send("speech-active");
+        }
+      });
     });
 
     speechService.on("recording-stopped", () => {
@@ -577,6 +607,14 @@ class ApplicationController {
     });
 
     speechService.on("interim-transcription", (text) => {
+      // If user/interviewer is actively speaking, postpone any pending utterance dispatch
+      if (this._utteranceTimer) {
+        clearTimeout(this._utteranceTimer);
+        this._utteranceTimer = setTimeout(() => {
+          this._utteranceTimer = null;
+          this.dispatchCoalescedUtterance();
+        }, 260);
+      }
       BrowserWindow.getAllWindows().forEach((window) => {
         window.webContents.send("interim-transcription", { text });
       });
@@ -604,6 +642,11 @@ class ApplicationController {
     // Auto-Type events broadcasting
     autoTypeService.on("autotype-started", (data) => {
       windowManager.broadcastToAllWindows("autotype-started", data);
+    });
+
+    // LLM Real-time Debug Telemetry broadcasting
+    llmService.on("debug-status", (statusData) => {
+      windowManager.broadcastToAllWindows("llm-debug-status", statusData);
     });
 
     autoTypeService.on("autotype-progress", (data) => {
@@ -654,7 +697,16 @@ class ApplicationController {
     ipcMain.handle("show-clipboard", () => windowManager.showClipboardWindow());
 
     ipcMain.on("set-opacity", (event, opacity) => {
-      windowManager.broadcastToAllWindows("update-opacity", opacity);
+      windowManager.setOpacity(opacity);
+    });
+    ipcMain.handle("get-opacity", () => {
+      return windowManager.currentOpacity !== undefined ? windowManager.currentOpacity : 0.38;
+    });
+    ipcMain.on("set-theme", (event, theme) => {
+      windowManager.setTheme(theme);
+    });
+    ipcMain.handle("get-theme", () => {
+      return windowManager.currentTheme || 'dark';
     });
     ipcMain.handle("show-target-box", () => windowManager.showTargetBox());
 
@@ -706,14 +758,59 @@ class ApplicationController {
 
     ipcMain.handle("start-speech-recognition", () => {
       speechService.startRecording();
+      if (this.getVoiceResponseTarget() === 'chat') {
+        windowManager.showChatWindow();
+      } else {
+        windowManager.hideChatWindow();
+        windowManager.showLLMReady();
+      }
+      if (typeof llmService.warmup === 'function') {
+        llmService.warmup();
+      }
       return speechService.getStatus();
     });
 
     ipcMain.handle("stop-speech-recognition", () => {
       speechService.stopRecording();
-      windowManager.hideChatWindow();
-      windowManager.hideLLMResponse();
+      // Keep chat window and LLM response visible so user can see transcription and response
       return speechService.getStatus();
+    });
+
+    ipcMain.handle("get-desktop-sources", async () => {
+      try {
+        const { desktopCapturer } = require("electron");
+        const sources = await desktopCapturer.getSources({ types: ["screen"] });
+        return sources.map((s) => ({ id: s.id, name: s.name }));
+      } catch (err) {
+        logger.error("Failed to get desktop sources for audio capture", { error: err.message });
+        return [];
+      }
+    });
+
+    ipcMain.handle("set-audio-source-mode", (_event, mode) => {
+      this.audioSourceMode = mode === "microphone" ? "microphone" : "system";
+      if (typeof speechService.updateSettings === 'function') {
+        speechService.updateSettings({ audioSourceMode: this.audioSourceMode });
+      }
+      windowManager.broadcastToAllWindows("audio-source-mode-changed", {
+        mode: this.audioSourceMode,
+      });
+      return { success: true, mode: this.audioSourceMode };
+    });
+
+    ipcMain.handle("get-audio-source-mode", () => {
+      return this.audioSourceMode || "system";
+    });
+
+    ipcMain.handle("toggle-audio-source-mode", () => {
+      this.audioSourceMode = this.audioSourceMode === "system" ? "microphone" : "system";
+      if (typeof speechService.updateSettings === 'function') {
+        speechService.updateSettings({ audioSourceMode: this.audioSourceMode });
+      }
+      windowManager.broadcastToAllWindows("audio-source-mode-changed", {
+        mode: this.audioSourceMode,
+      });
+      return { success: true, mode: this.audioSourceMode };
     });
 
     // Raw PCM audio captured by the renderer's Web Audio API (Windows Whisper path)
@@ -726,12 +823,20 @@ class ApplicationController {
     // Also handle direct send events for fallback
     ipcMain.on("start-speech-recognition", () => {
       speechService.startRecording();
+      if (this.getVoiceResponseTarget() === 'chat') {
+        windowManager.showChatWindow();
+      } else {
+        windowManager.hideChatWindow();
+        windowManager.showLLMReady();
+      }
+      if (typeof llmService.warmup === 'function') {
+        llmService.warmup();
+      }
     });
 
     ipcMain.on("stop-speech-recognition", () => {
       speechService.stopRecording();
-      windowManager.hideChatWindow();
-      windowManager.hideLLMResponse();
+      // Keep chat window and LLM response visible so user can see transcription and response
     });
     ipcMain.on("hide-chat-window", () => {
       windowManager.hideChatWindow();
@@ -816,20 +921,16 @@ class ApplicationController {
     });
 
     ipcMain.handle("move-window", (event, { deltaX, deltaY }) => {
-      const mainWindow = windowManager.getWindow("main");
-      if (mainWindow) {
-        const [currentX, currentY] = mainWindow.getPosition();
-        const newX = currentX + deltaX;
-        const newY = currentY + deltaY;
-        mainWindow.setPosition(newX, newY);
-        logger.debug("Main window moved", {
-          deltaX,
-          deltaY,
-          from: { x: currentX, y: currentY },
-          to: { x: newX, y: newY },
-        });
-      }
+      windowManager.moveBoundWindows(deltaX, deltaY);
       return { success: true };
+    });
+
+    ipcMain.handle("start-hover-drag", () => {
+      return windowManager.startHoverDrag();
+    });
+
+    ipcMain.handle("stop-hover-drag", () => {
+      return windowManager.stopHoverDrag();
     });
 
     ipcMain.handle("get-session-history", () => {
@@ -864,7 +965,7 @@ class ApplicationController {
       (async () => {
         try {
           const sessionHistory = sessionManager.getOptimizedHistory();
-          await this.processWithLLM(text, sessionHistory);
+          await this.processWithLLM(text, sessionHistory, 'chat');
         } catch (error) {
           logger.error("Failed to process chat message with LLM", {
             error: error.message,
@@ -944,6 +1045,42 @@ class ApplicationController {
           timestamp: new Date().toISOString()
         };
       }
+    });
+
+    ipcMain.handle("get-system-diagnostics", async () => {
+      return {
+        timestamp: Date.now(),
+        llm: typeof llmService.getDiagnostics === 'function' ? llmService.getDiagnostics() : {},
+        speech: {
+          provider: speechService ? speechService.provider : 'unknown',
+          isRecording: speechService ? speechService.isRecording : false,
+          available: speechService && speechService.isAvailable ? speechService.isAvailable() : false,
+          audioSourceMode: this.audioSourceMode || 'system'
+        },
+        windows: windowManager ? windowManager.getWindowStats() : {},
+        app: {
+          activeSkill: this.activeSkill,
+          codingLanguage: this.codingLanguage,
+          interactionMode: this.interactionMode,
+          mcqMode: this.isMcqMode,
+          rubicMode: this.rubicMode
+        }
+      };
+    });
+
+    ipcMain.handle("run-live-diagnostic-probe", async () => {
+      const llmProbe = typeof llmService.runLiveDiagnosticsProbe === 'function' 
+        ? await llmService.runLiveDiagnosticsProbe() 
+        : { error: 'Diagnostic probe not implemented' };
+      return {
+        timestamp: Date.now(),
+        llm: llmProbe,
+        speech: {
+          available: speechService && speechService.isAvailable ? speechService.isAvailable() : false,
+          isRecording: speechService ? speechService.isRecording : false,
+          provider: speechService ? speechService.provider : 'unknown'
+        }
+      };
     });
 
     // Settings handlers
@@ -1505,16 +1642,22 @@ class ApplicationController {
     if (currentStatus.isRecording) {
       try {
         speechService.stopRecording();
-        windowManager.hideChatWindow();
-        windowManager.hideLLMResponse();
-        logger.info("Speech recognition stopped via global shortcut");
+        logger.info("Speech recognition stopped via global shortcut; keeping windows visible for response");
       } catch (error) {
         logger.error("Error stopping speech recognition:", error);
       }
     } else {
       try {
         speechService.startRecording();
-        windowManager.showChatWindow();
+        if (this.getVoiceResponseTarget() === 'chat') {
+          windowManager.showChatWindow();
+        } else {
+          windowManager.hideChatWindow();
+          windowManager.showLLMReady();
+        }
+        if (typeof llmService.warmup === 'function') {
+          llmService.warmup();
+        }
         logger.info("Speech recognition started via global shortcut");
       } catch (error) {
         logger.error("Error starting speech recognition:", error);
@@ -1576,9 +1719,18 @@ class ApplicationController {
     // Interactive mode: Right arrow does nothing
   }
 
+  backtrackAnswer(delta) {
+    const llmWindow = windowManager.getWindow('llmResponse');
+    if (llmWindow && !llmWindow.isDestroyed()) {
+      llmWindow.webContents.send('backtrack-answer', { delta });
+      logger.debug('Sent backtrack-answer event to llmResponse', { delta });
+    }
+  }
+
   navigateSkill(direction) {
     const availableSkills = [
       "dsa",
+      "interview",
     ];
 
     const currentIndex = availableSkills.indexOf(this.activeSkill);
@@ -1696,22 +1848,34 @@ class ApplicationController {
     }
   }
 
-  async processWithLLM(text, sessionHistory) {
+  async processWithLLM(text, sessionHistory, source = 'overlay') {
     try {
+      if (!sessionHistory) {
+        sessionHistory = sessionManager.getOptimizedHistory();
+      }
       // Add user input to session memory
       sessionManager.addUserInput(text, 'llm_input');
 
-      // Check if current skill needs programming language context
+      // Check if current query is interview/conceptual or requires code
+      const isInterview = this.activeSkill === 'interview' || (typeof llmService.isInterviewOrConceptualQuery === 'function' && llmService.isInterviewOrConceptualQuery(text, this.activeSkill));
       const skillsRequiringProgrammingLanguage = ['dsa'];
-      const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
+      const needsProgrammingLanguage = !isInterview && skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
       this._responseSeq = (this._responseSeq || 0) + 1;
       const messageId = `chat-${Date.now()}-${this._responseSeq}`;
-      windowManager.broadcastToAllWindows("transcription-llm-response-start", {
-        messageId,
-        skill: this.activeSkill
-      });
-      windowManager.showLLMLoading();
+
+      if (source === 'chat') {
+        this.sendToChatWindow("transcription-llm-response-start", {
+          messageId,
+          skill: this.activeSkill
+        });
+      } else {
+        windowManager.broadcastToAllWindows("transcription-llm-response-start", {
+          messageId,
+          skill: this.activeSkill
+        });
+        windowManager.showLLMLoading();
+      }
 
       const llmResult = await llmService.processTextWithSkillStream(
         text,
@@ -1719,10 +1883,17 @@ class ApplicationController {
         sessionHistory.recent,
         needsProgrammingLanguage ? this.codingLanguage : null,
         (delta) => {
-          windowManager.broadcastToAllWindows("transcription-llm-response-chunk", {
-            messageId,
-            delta
-          });
+          if (source === 'chat') {
+            this.sendToChatWindow("transcription-llm-response-chunk", {
+              messageId,
+              delta
+            });
+          } else {
+            windowManager.broadcastToAllWindows("transcription-llm-response-chunk", {
+              messageId,
+              delta
+            });
+          }
         }
       );
       llmResult.metadata = { ...llmResult.metadata, messageId };
@@ -1742,13 +1913,22 @@ class ApplicationController {
         usedFallback: llmResult.metadata.usedFallback,
       });
 
-      this.broadcastTranscriptionLLMResponse(llmResult);
-
-      windowManager.showLLMResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-      });
+      if (source === 'chat') {
+        this.sendToChatWindow("transcription-llm-response", {
+          response: llmResult.response,
+          metadata: llmResult.metadata,
+          messageId,
+          skill: this.activeSkill,
+          isTranscriptionResponse: false
+        });
+      } else {
+        this.broadcastTranscriptionLLMResponse(llmResult);
+        windowManager.showLLMResponse(llmResult.response, {
+          skill: this.activeSkill,
+          processingTime: llmResult.metadata.processingTime,
+          usedFallback: llmResult.metadata.usedFallback,
+        });
+      }
     } catch (error) {
       logger.error("LLM processing failed", {
         error: error.message,
@@ -1771,6 +1951,203 @@ class ApplicationController {
   }
 
   /**
+   * Filter common Whisper hallucination artifacts from microphone silence/noise.
+   */
+  _isWhisperHallucination(text) {
+    if (!text || typeof text !== 'string') return true;
+    const trimmed = text.trim();
+    if (trimmed.length <= 1) return true;
+    const lower = trimmed.toLowerCase();
+    const hallucinations = [
+      'thank you for watching',
+      'thanks for watching',
+      'subtitles by',
+      'amara.org',
+      'subscribed',
+      'please subscribe',
+      'thank you very much',
+      'bye bye',
+      'you'
+    ];
+    if (hallucinations.some(h => lower === h || lower === `${h}.`)) return true;
+    return false;
+  }
+
+  /**
+   * Identify simple interview greetings / pleasantries to respond instantly without lag.
+   */
+  _isPureGreeting(text) {
+    if (!text || typeof text !== 'string') return false;
+    const clean = text.toLowerCase().replace(/[^a-z\s]/g, '').replace(/\s+/g, ' ').trim();
+    if (!clean || clean.length > 50) return false;
+    
+    const greetingRegex = /^(hi|hello|hey|hey there|hi there|good morning|good afternoon|good evening)?\s*(how are you|how are you doing|how are you doing today|hows it going|can you hear me|am i audible|can you see me|are you ready|shall we start|lets start)?$/i;
+    
+    if (!greetingRegex.test(clean)) return false;
+    
+    const singleWords = clean.split(' ');
+    const allowedWords = new Set([
+      'hi', 'hello', 'hey', 'there', 'good', 'morning', 'afternoon', 'evening',
+      'how', 'are', 'you', 'doing', 'today', 'hows', 'it', 'going',
+      'can', 'hear', 'me', 'am', 'i', 'audible', 'see', 'ready', 'shall', 'we', 'start', 'lets'
+    ]);
+    return singleWords.every(w => allowedWords.has(w));
+  }
+
+  /**
+   * Identify recruiter transitional acknowledgments that precede actual questions.
+   * If a recruiter simply says "Great, thank you." or "That makes sense.", we should
+   * NOT dispatch prematurely—we give a longer debounce window for the full question.
+   */
+  _isRecruiterPreambleOnly(text) {
+    if (!text || typeof text !== 'string') return false;
+    const t = text.trim().toLowerCase().replace(/[\.,!?;:\-]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!t) return false;
+    
+    const preambles = [
+      'okay', 'ok', 'great', 'awesome', 'good', 'perfect', 'got it', 'makes sense',
+      'that makes sense', 'thank you', 'thanks', 'cool', 'nice', 'moving forward',
+      'moving on', 'next question', 'alright', 'right', 'all right', 'sure',
+      'fair enough', 'understood', 'sounds good', 'very good', 'thank you for that',
+      'thanks for explaining', 'thanks for explaining that', 'great answer', 'that was great',
+      'yes', 'yeah', 'yep', 'exactly', 'correct', 'absolutely'
+    ];
+    if (preambles.includes(t)) return true;
+
+    const words = t.split(' ');
+    if (words.length <= 4) {
+      const hasQuestionWord = /\b(what|how|why|when|where|who|explain|tell|describe|can|could|in your|would|if|difference|pros|cons)\b/i.test(t);
+      if (!hasQuestionWord && !/\?$/.test(text.trim())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Extract the actual actionable question from a composite recruiter statement.
+   * E.g. "Great, thanks for explaining that. Moving forward, how do you handle deadlocks?"
+   * -> "how do you handle deadlocks?"
+   */
+  _extractCoreQuestion(text) {
+    if (!text || typeof text !== 'string') return text;
+    let cleaned = text.trim();
+    const prefixRegex = /^(\b(great|awesome|perfect|got it|makes sense|that makes sense|thank you|thanks|cool|nice|alright|all right|right|okay|ok|understood)\b[,\.\s!\-]*(thanks for explaining that|thank you for that|that was a great answer|that was great|good job|thanks for that)?[,\.\s!\-]*)+/i;
+    cleaned = cleaned.replace(prefixRegex, '');
+    const connectorRegex = /^(\b(moving forward|moving on|leading into my next question|next question|now|so|then|building on top of that|building on that)\b[,\.\s!\-]*)+/i;
+    cleaned = cleaned.replace(connectorRegex, '');
+    return cleaned.trim() || text.trim();
+  }
+
+  /**
+   * Detect if an interview question is incomplete, a mumble, or a trailing sentence fragment.
+   * If true, we avoid forcing an answer or calling the LLM; instead, we signal the candidate
+   * to politely ask the interviewer to clarify or repeat.
+   */
+  _isIncompleteOrMumble(text) {
+    if (!text || typeof text !== 'string') return true;
+    const clean = text.trim();
+    if (clean.length < 5) return true;
+
+    // Pure conversational greetings (e.g. "hi", "good morning") are valid
+    if (this._isPureGreeting(clean)) return false;
+
+    // Check whisper hallucination loops
+    if (this._isWhisperHallucination(clean)) return true;
+
+    const words = clean.split(/\s+/).filter(Boolean);
+
+    // Rule 1: Filler-only speech with no substantive concepts
+    const fillerWords = new Set([
+      'um', 'uh', 'er', 'ah', 'like', 'you', 'know', 'so', 'yeah', 'yes', 'no',
+      'well', 'actually', 'basically', 'right', 'okay', 'ok', 'i', 'mean', 'just', 'huh'
+    ]);
+    const substantiveWords = words.filter(w => !fillerWords.has(w.toLowerCase().replace(/[^a-z0-9]/g, '')));
+    if (substantiveWords.length < 2) {
+      return true;
+    }
+
+    // Rule 2: If question has 5+ words and ends with question mark or punctuation, it is complete
+    const hasPunctuation = /[?]$/.test(clean);
+    if (words.length >= 5 && hasPunctuation) {
+      return false;
+    }
+
+    // Rule 3: Dangling prefixes with no question body (e.g., "can you", "could you tell me", "what if we")
+    const danglingPrefixOnly = /^(can you|could you|would you|should we|tell me|tell us|what if|what if we|how about|what about|so what|and then|and then what about|could you tell me)\s*[.,!?;:]*$/i;
+    if (danglingPrefixOnly.test(clean)) {
+      return true;
+    }
+
+    // Rule 4: Trailing dangling conjunctions where the sentence clearly got cut off mid-thought:
+    const trailingDanglingConjunction = /\b(and|or|because|but|although|while|whereas|as well as|when you were|you were|they were|we were)\s*[.,!?;:]*$/i;
+    if (trailingDanglingConjunction.test(clean)) {
+      return true;
+    }
+
+    // Rule 5: If there's no question mark and the speech trails off on dangling connector:
+    if (!hasPunctuation) {
+      const trailingDangling = /\b(about|were|when|where|why|how|what|if|with|such as|into|onto|than|to|for|in|at|by|from|as|me|us|we)\s*$/i;
+      if (trailingDangling.test(clean)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Display a high-impact, professional signal card when speech is incomplete or unclear.
+   * Gives the candidate natural, confident phrases to ask for clarification instead of guessing.
+   */
+  _showClarificationSignal(cleanText, messageId) {
+    const clarificationResponse = [
+      `❓ Question: Question Incomplete or Unclear`,
+      `🗣️ Start with: "Could you clarify what specific aspect you'd like me to focus on?"`,
+      `⚡ Talking Points:`,
+      `• The statement [trailed off] or was [incomplete] before a specific question was asked.`,
+      `• Asking for clarification sounds [confident, attentive, and senior]—never guess on broken fragments.`,
+      `• Alternative to say: "Could you repeat that last part? I want to make sure I cover the right angle."`,
+      `🎯 Architecture & Problem Breakdown:`,
+      `• The Problem: Answering an ambiguous, partial fragment risks answering the wrong topic entirely.`,
+      `• Architecture & Fix: Politely bounce the question back to establish clear technical boundaries before diving into code.`,
+      `• Trade-off / Gotcha: Never guess or start rambling when speech trails off; senior engineers clarify scope first.`,
+      `• Project Metric: In system design and panel interviews, clarifying requirements upfront scores in the top 10% rubric.`
+    ].join('\n');
+
+    sessionManager.addModelResponse(clarificationResponse, {
+      skill: this.activeSkill,
+      processingTime: 1,
+      usedFallback: false,
+      isInstantResponse: true,
+      isLocked: true,
+      isTranscriptionResponse: true
+    });
+
+    this.sendTranscriptionLLMResponseToVoiceTargets({
+      response: clarificationResponse,
+      metadata: {
+        skill: this.activeSkill,
+        processingTime: 1,
+        usedFallback: false,
+        isLocked: true,
+        isTranscriptionResponse: true,
+        messageId
+      }
+    });
+
+    if (this.shouldShowVoiceOverlay()) {
+      windowManager.showLLMResponse(clarificationResponse, {
+        skill: this.activeSkill,
+        messageId,
+        isInstantResponse: true,
+        isLocked: true,
+        isTranscriptionResponse: true
+      });
+    }
+  }
+
+  /**
    * Buffer a transcribed fragment and (re)arm the coalesce debounce. Fragments
    * are shown in the UI immediately so speech feels live, but the LLM is only
    * asked once the speaker has actually paused — this is what stops one spoken
@@ -1782,8 +2159,12 @@ class ApplicationController {
       return;
     }
 
-    // Route speech UI events according to the user's response-target setting.
-    sessionManager.addUserInput(fragment, 'speech');
+    if (this._isWhisperHallucination(fragment)) {
+      logger.debug("Filtered whisper hallucination fragment", { fragment });
+      return;
+    }
+
+    // Route speech UI events immediately so hearing bar reflects live speech
     this.sendToVoiceResponseWindows("transcription-received", { text: fragment });
 
     this._utteranceBuffer = this._utteranceBuffer
@@ -1802,49 +2183,130 @@ class ApplicationController {
       return;
     }
 
+    // In interview mode or system audio mode, provide zero-click, ultra-low latency response
+    const isInterviewQuestion = (this.activeSkill === 'interview' || this.audioSourceMode === 'system');
+    const isQuestionMark = /\?$/.test(fragment.trim());
+    const isOtherPunctuation = /[!\.]$/.test(fragment.trim());
+    const isPreambleOnly = isInterviewQuestion && this._isRecruiterPreambleOnly(this._utteranceBuffer);
+
+    // Fast-path: If the buffer already matches local knowledge with high confidence,
+    // dispatch IMMEDIATELY with 0ms wait!
+    if (isInterviewQuestion && this._utteranceBuffer.length >= 10) {
+      const instantCheck = localKnowledgeService.synthesizeInstantResponse(this._utteranceBuffer, this.activeSkill);
+      if (instantCheck.isHighConfidenceMatch && instantCheck.fullResponse) {
+        logger.info("Instant local knowledge match detected during speech; dispatching with 0ms delay", {
+          topic: instantCheck.questionTitle
+        });
+        this.dispatchCoalescedUtterance();
+        return;
+      }
+    }
+
+    // Conversational debounce:
+    // - If it's pure preamble/acknowledgment ("Great, thanks.", "That makes sense."), wait 900ms for recruiter's question
+    // - 140ms for ?, 240ms for ., 320ms otherwise (was 400ms / 650ms / 750ms!)
+    const coalesceDelay = isInterviewQuestion 
+      ? (isPreambleOnly ? 900 : (isQuestionMark ? 140 : (isOtherPunctuation ? 240 : 320))) 
+      : this._utteranceCoalesceMs;
+
     this._utteranceTimer = setTimeout(() => {
       this._utteranceTimer = null;
       this.dispatchCoalescedUtterance();
-    }, this._utteranceCoalesceMs);
+    }, coalesceDelay);
   }
 
   /**
-   * Send the coalesced utterance to the LLM. If a previous dispatch is still
-   * running, leave the buffer intact and let that dispatch's completion pick it
-   * up — so we never pile up overlapping requests for the same person talking.
+   * Send the coalesced utterance to the LLM.
+   * Latest-Wins Preemption Model: If a previous dispatch is still running,
+   * immediately abort the obsolete request and start processing the latest
+   * question without any lockup or lag.
    */
   async dispatchCoalescedUtterance() {
-    if (this._utteranceDispatchInFlight) {
-      return;
-    }
     const combined = this._utteranceBuffer.trim();
     if (!combined) {
       return;
     }
+
+    // Suppress dispatch if the buffer is solely an acknowledgment filler
+    if (this._isRecruiterPreambleOnly(combined)) {
+      logger.debug("Suppressing dispatch for pure recruiter acknowledgment", { text: combined });
+      this._utteranceBuffer = "";
+      return;
+    }
+
+    // Require substantive content (> 2 chars and at least two letters)
+    if (combined.length < 3 || !/[a-zA-Z]{2,}/.test(combined)) {
+      return;
+    }
+
+    // Extract core question from recruiter compound statement
+    const targetQuestion = this._extractCoreQuestion(combined);
+
+    // If an existing LLM generation is currently running, PREEMPT IT!
+    if (this._activeLlmAbortController) {
+      logger.info("Preempting in-flight LLM question with new incoming question", {
+        newQuestionPreview: targetQuestion.substring(0, 80)
+      });
+      try {
+        this._activeLlmAbortController.abort('Preempted by newer question');
+      } catch (e) {
+        logger.warn("Error aborting previous in-flight LLM controller", { error: e.message });
+      }
+      this._activeLlmAbortController = null;
+    }
+
     this._utteranceBuffer = "";
     this._utteranceDispatchInFlight = true;
 
+    // Create a new AbortController and track request ID for latest-wins validation
+    const abortController = new AbortController();
+    this._activeLlmAbortController = abortController;
+    const currentRequestId = ++this._currentLlmRequestId;
+
+    // Record the full, coalesced question once in session history
+    sessionManager.addUserInput(targetQuestion, 'speech');
+
     try {
+      const finalQuestion = targetQuestion || combined;
       const sessionHistory = sessionManager.getOptimizedHistory();
-      await this.processTranscriptionWithLLM(combined, sessionHistory);
+      await this.processTranscriptionWithLLM(finalQuestion, sessionHistory, abortController.signal, currentRequestId);
     } catch (error) {
-      logger.error("Failed to process transcription with LLM", {
-        error: error.message,
-        text: combined.substring(0, 100)
-      });
+      if (abortController.signal.aborted || error.message === 'ABORTED' || error.name === 'AbortError') {
+        logger.info("Transcription LLM was preempted by newer question, ignoring aborted response", {
+          requestId: currentRequestId
+        });
+      } else {
+        logger.error("Failed to process transcription with LLM", {
+          error: error.message,
+          text: combined.substring(0, 100)
+        });
+      }
     } finally {
-      this._utteranceDispatchInFlight = false;
-      // Anything that arrived while we were busy gets answered now.
-      if (this._utteranceBuffer.trim()) {
-        this.dispatchCoalescedUtterance();
+      if (this._currentLlmRequestId === currentRequestId) {
+        this._utteranceDispatchInFlight = false;
+        this._activeLlmAbortController = null;
+      }
+      // Check if any fresh fragments arrived while processing
+      const leftover = this._utteranceBuffer.trim();
+      if (leftover && leftover.length >= 15 && /[a-zA-Z]{3,}/.test(leftover)) {
+        this._utteranceTimer = setTimeout(() => {
+          this._utteranceTimer = null;
+          this.dispatchCoalescedUtterance();
+        }, 450);
       }
     }
   }
 
-  async processTranscriptionWithLLM(text, sessionHistory) {
+  async processTranscriptionWithLLM(text, sessionHistory, abortSignal = null, requestId = 0) {
+    if (abortSignal && abortSignal.aborted) {
+      return;
+    }
+    if (!sessionHistory) {
+      sessionHistory = sessionManager.getOptimizedHistory();
+    }
+
     // Hoisted so the catch block can tie a fallback answer to the same UI
-    // bubble the streaming start event created; otherwise a total failure
-    // leaves an empty streamed bubble stranded next to the fallback message.
+    // bubble the streaming start event created.
     let messageId = null;
     try {
       // Validate input text
@@ -1856,7 +2318,8 @@ class ApplicationController {
         return;
       }
 
-      const cleanText = text.trim();
+      const rawTrimmed = (text || '').trim();
+      const cleanText = this._extractCoreQuestion(rawTrimmed) || rawTrimmed;
       if (cleanText.length < 2) {
         logger.debug("Skipping LLM processing for very short transcription", {
           text: cleanText
@@ -1866,38 +2329,157 @@ class ApplicationController {
 
       logger.info("Processing transcription with intelligent LLM response", {
         skill: this.activeSkill,
+        requestId,
         textLength: cleanText.length,
         textPreview: cleanText.substring(0, 100) + "..."
       });
 
-      // Check if current skill needs programming language context
+      // Pure greeting fast-path: Instant 15ms response for greetings so recruiter can move on immediately
+      if (this._isPureGreeting(cleanText)) {
+        logger.info("Handling pure conversational greeting with ultra-fast instant response", { text: cleanText });
+        const greetingResponse = `❓ Question: Warm interview greeting\n🗣️ Start with: "I'm doing well, thank you! It's great to connect with you today—I'm really excited for our conversation."\n⚡ Talking Points:\n• Express [genuine enthusiasm] about the role, team, and technology stack.\n• Confirm [clear audio] and that you are ready to dive into technical discussions.\n🎯 Key-Value Insights:\n• Candidate Mindset: Warm, articulate, humble, and engineering-ready.\n• Our Approach: Keep initial greeting brief and transition smoothly to technical questions.`;
+        
+        this._responseSeq = (this._responseSeq || 0) + 1;
+        messageId = `tr-${Date.now()}-${this._responseSeq}`;
+        this.sendToVoiceResponseWindows("transcription-llm-response-start", {
+          messageId,
+          skill: this.activeSkill,
+          questionPreview: cleanText
+        });
+        
+        const fastResult = {
+          response: greetingResponse,
+          metadata: {
+            skill: this.activeSkill,
+            processingTime: 15,
+            usedFallback: false,
+            isTranscriptionResponse: true,
+            messageId
+          }
+        };
+
+        sessionManager.addModelResponse(greetingResponse, {
+          skill: this.activeSkill,
+          processingTime: 15,
+          usedFallback: false,
+          isTranscriptionResponse: true
+        });
+
+        this.sendTranscriptionLLMResponseToVoiceTargets(fastResult);
+        if (this.shouldShowVoiceOverlay()) {
+          windowManager.showLLMResponse(greetingResponse, {
+            skill: this.activeSkill,
+            processingTime: 15,
+            usedFallback: false,
+            isTranscriptionResponse: true
+          });
+        }
+        return;
+      }
+
+      // Check if current speech transcription is interview/conceptual or requires code
+      const isInterview = this.activeSkill === 'interview' || (typeof llmService.isInterviewOrConceptualQuery === 'function' && llmService.isInterviewOrConceptualQuery(cleanText, this.activeSkill));
       const skillsRequiringProgrammingLanguage = ['dsa'];
-      const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
+      const needsProgrammingLanguage = !isInterview && skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
       // Stream the answer progressively to the configured speech target.
       // A unique messageId ties the start/chunk/final events to one bubble so
       // the UI never duplicates or interleaves concurrent responses.
       this._responseSeq = (this._responseSeq || 0) + 1;
       messageId = `tr-${Date.now()}-${this._responseSeq}`;
+
+      // 1. Instant local knowledge check
+      const instant = localKnowledgeService.synthesizeInstantResponse(cleanText, this.activeSkill);
+
+      // Path A: High-Confidence Curated Knowledge Match (<0.4ms)
+      // Stick to this ONE answer! Never run a remote LLM call that will mutate or swap out text while reading!
+      if (instant.isHighConfidenceMatch && instant.fullResponse) {
+        logger.info("High-confidence answer locked in; skipping redundant LLM call to guarantee a single stable response", {
+          topic: instant.questionTitle,
+          requestId
+        });
+
+        this.sendToVoiceResponseWindows("transcription-llm-response-start", {
+          messageId,
+          skill: this.activeSkill,
+          questionPreview: cleanText.substring(0, 100),
+          questionTitle: instant.questionTitle,
+          instantResponse: instant.fullResponse
+        });
+
+        sessionManager.addModelResponse(instant.fullResponse, {
+          skill: this.activeSkill,
+          processingTime: 1,
+          usedFallback: false,
+          isInstantResponse: true,
+          isLocked: true,
+          isTranscriptionResponse: true
+        });
+
+        this.sendTranscriptionLLMResponseToVoiceTargets({
+          response: instant.fullResponse,
+          metadata: {
+            skill: this.activeSkill,
+            processingTime: 1,
+            usedFallback: false,
+            isInstantResponse: true,
+            isLocked: true,
+            isTranscriptionResponse: true,
+            messageId
+          }
+        });
+        return;
+      }
+
+      // Path B: Incomplete Speech, Mumbles, or Trailing Sentence Fragments
+      // Do NOT force a synthetic answer or call the LLM to hallucinate; throw a clarification signal instead!
+      if (this._isIncompleteOrMumble(cleanText)) {
+        logger.info("Incomplete or trailing speech detected; showing clarification signal card instead of forcing answer", {
+          requestId,
+          text: cleanText
+        });
+        this._showClarificationSignal(cleanText, messageId);
+        return;
+      }
+
+      // Path C: Novel / Bespoke Question (Requires Remote LLM)
+      // Keep window in a calm "Analyzing..." state. Do NOT render a fake question-echoing card!
+      // Do NOT stream partial word chunks that cause layout jumping. Render the final answer ONCE upon completion.
       this.sendToVoiceResponseWindows("transcription-llm-response-start", {
         messageId,
-        skill: this.activeSkill
+        skill: this.activeSkill,
+        questionPreview: cleanText.substring(0, 100),
+        questionTitle: instant.questionTitle || "Analyzing question...",
+        isAnalyzing: true
       });
+
       if (this.shouldShowVoiceOverlay()) {
-        windowManager.showLLMLoading();
+        windowManager.showLLMLoading(cleanText.substring(0, 100));
       }
+
+      if (abortSignal && abortSignal.aborted) {
+        return;
+      }
+
       const llmResult = await llmService.processTranscriptionWithIntelligentResponseStream(
         cleanText,
         this.activeSkill,
-        sessionHistory.recent,
+        (sessionHistory && sessionHistory.recent) || [],
         needsProgrammingLanguage ? this.codingLanguage : null,
         (delta) => {
           this.sendToVoiceResponseWindows("transcription-llm-response-chunk", {
             messageId,
             delta
           });
-        }
+        },
+        abortSignal
       );
+
+      if (abortSignal && abortSignal.aborted) {
+        logger.info("Dropping finished LLM result because request was aborted for newer question", { requestId });
+        return;
+      }
+
       llmResult.metadata = { ...llmResult.metadata, messageId };
 
       // Add LLM response to session memory
@@ -1908,17 +2490,11 @@ class ApplicationController {
         isTranscriptionResponse: true
       });
 
+      // Render the final answer cleanly ONCE
       this.sendTranscriptionLLMResponseToVoiceTargets(llmResult);
-      if (this.shouldShowVoiceOverlay()) {
-        windowManager.showLLMResponse(llmResult.response, {
-          skill: this.activeSkill,
-          processingTime: llmResult.metadata.processingTime,
-          usedFallback: llmResult.metadata.usedFallback,
-          isTranscriptionResponse: true
-        });
-      }
 
       logger.info("Transcription LLM response completed", {
+        requestId,
         responseLength: llmResult.response.length,
         skill: this.activeSkill,
         programmingLanguage: needsProgrammingLanguage ? this.codingLanguage : 'not applicable',
@@ -1926,7 +2502,13 @@ class ApplicationController {
       });
 
     } catch (error) {
+      if (abortSignal && (abortSignal.aborted || error.message === 'ABORTED' || error.name === 'AbortError')) {
+        logger.debug("Suppressed error/fallback for aborted transcription LLM request", { requestId });
+        return;
+      }
+
       logger.error("Transcription LLM processing failed", {
+        requestId,
         error: error.message,
         errorStack: error.stack,
         skill: this.activeSkill,
@@ -1951,14 +2533,6 @@ class ApplicationController {
         });
 
         this.sendTranscriptionLLMResponseToVoiceTargets(fallbackResult);
-        if (this.shouldShowVoiceOverlay()) {
-          windowManager.showLLMResponse(fallbackResult.response, {
-            skill: this.activeSkill,
-            processingTime: fallbackResult.metadata.processingTime,
-            usedFallback: true,
-            isTranscriptionResponse: true
-          });
-        }
         logger.info("Used fallback response for transcription", {
           skill: this.activeSkill,
           fallbackResponse: fallbackResult.response
@@ -2048,8 +2622,8 @@ class ApplicationController {
   }
 
   getVoiceResponseTarget() {
-    const configured = String(process.env.WHISPER_RESPONSE_TARGET || 'both').trim().toLowerCase();
-    return ['chat', 'overlay', 'both'].includes(configured) ? configured : 'both';
+    const configured = String(process.env.WHISPER_RESPONSE_TARGET || 'overlay').trim().toLowerCase();
+    return ['chat', 'overlay', 'both'].includes(configured) ? configured : 'overlay';
   }
 
   shouldShowVoiceOverlay() {
@@ -2058,10 +2632,15 @@ class ApplicationController {
 
   sendToVoiceResponseWindows(channel, data) {
     const target = this.getVoiceResponseTarget();
-    if (target === 'chat' || target === 'both') {
+    if (target === 'chat') {
       this.sendToChatWindow(channel, data);
-    }
-    if (target === 'overlay' || target === 'both') {
+    } else if (target === 'overlay') {
+      const responseWindow = windowManager.getWindow("llmResponse");
+      if (responseWindow && !responseWindow.isDestroyed()) {
+        responseWindow.webContents.send(channel, data);
+      }
+    } else if (target === 'both') {
+      this.sendToChatWindow(channel, data);
       const responseWindow = windowManager.getWindow("llmResponse");
       if (responseWindow && !responseWindow.isDestroyed()) {
         responseWindow.webContents.send(channel, data);
@@ -2070,13 +2649,26 @@ class ApplicationController {
   }
 
   sendTranscriptionLLMResponseToVoiceTargets(llmResult) {
+    const messageId = (llmResult.metadata && llmResult.metadata.messageId) || null;
     const data = {
       response: llmResult.response,
+      content: llmResult.response,
       metadata: llmResult.metadata,
-      messageId: llmResult.metadata && llmResult.metadata.messageId,
+      messageId,
       skill: this.activeSkill,
       isTranscriptionResponse: true
     };
+    if (this.shouldShowVoiceOverlay()) {
+      windowManager.showLLMResponse(llmResult.response, {
+        skill: this.activeSkill,
+        messageId,
+        isInstantResponse: llmResult.metadata && llmResult.metadata.isInstantResponse,
+        isLocked: llmResult.metadata && llmResult.metadata.isLocked,
+        processingTime: llmResult.metadata && llmResult.metadata.processingTime,
+        usedFallback: llmResult.metadata && llmResult.metadata.usedFallback,
+        isTranscriptionResponse: true
+      });
+    }
     this.sendToVoiceResponseWindows("transcription-llm-response", data);
   }
 
@@ -2112,6 +2704,8 @@ class ApplicationController {
     this._isQuitting = true;
     logger.info("Application quit initiated via Dock, shortcut, or signal");
     try {
+      sessionManager.clear();
+      this._utteranceBuffer = "";
       globalShortcut.unregisterAll();
       windowManager.destroyAllWindows();
       clipboardTrackerManager.stop();
@@ -2149,7 +2743,7 @@ class ApplicationController {
     // distinguish "unset" from "stale value from a previous load".
     return {
       codingLanguage: this.codingLanguage || "cpp",
-      activeSkill: this.activeSkill || "dsa",
+      activeSkill: this.activeSkill || "interview",
       appIcon: this.appIcon || "settings",
       selectedIcon: this.appIcon || "settings",
       windowGap: windowManager.windowGap,
@@ -2163,20 +2757,30 @@ class ApplicationController {
       whisperDevice: process.env.WHISPER_DEVICE || "auto",
       whisperCaptureMode: process.env.WHISPER_CAPTURE_MODE ||
         (process.env.WHISPER_MANUAL_CAPTURE === "true" ? "manual" : "vad"),
-      whisperResponseTarget: process.env.WHISPER_RESPONSE_TARGET || "both",
+      whisperResponseTarget: process.env.WHISPER_RESPONSE_TARGET || "overlay",
       whisperSegmentMs: process.env.WHISPER_SEGMENT_MS || "4000",
       geminiKey: process.env.GEMINI_API_KEY || "",
       geminiKeySecondary: process.env.GEMINI_API_KEY_SECONDARY || "",
 
       azureConfigured: !!process.env.AZURE_SPEECH_KEY && !!process.env.AZURE_SPEECH_REGION,
       speechAvailable: this.speechAvailable,
-      isMcqMode: this.isMcqMode
+      isMcqMode: this.isMcqMode,
+      audioSourceMode: this.audioSourceMode || "system"
     };
   }
 
   saveSettings(settings) {
     try {
       // ── In-memory updates + window broadcasts ──
+      if (settings.audioSourceMode !== undefined) {
+        this.audioSourceMode = settings.audioSourceMode === "microphone" ? "microphone" : "system";
+        if (typeof speechService.updateSettings === 'function') {
+          speechService.updateSettings({ audioSourceMode: this.audioSourceMode });
+        }
+        windowManager.broadcastToAllWindows("audio-source-mode-changed", {
+          mode: this.audioSourceMode,
+        });
+      }
       if (settings.isMcqMode !== undefined) {
         this.setMcqMode(settings.isMcqMode);
       }

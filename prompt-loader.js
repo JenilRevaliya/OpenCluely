@@ -28,7 +28,8 @@ class PromptLoader {
       for (const file of files) {
         if (file.endsWith('.md')) {
           const skillName = path.basename(file, '.md');
-          if (skillName !== 'dsa') continue; // only keep DSA
+          const allowedSkills = ['dsa', 'interview'];
+          if (!allowedSkills.includes(skillName)) continue;
           const filePath = path.join(promptsDir, file);
           const promptContent = fs.readFileSync(filePath, 'utf8');
           
@@ -358,6 +359,11 @@ STRICT REQUIREMENTS:
     // Map common variations to standard names
     const skillMap = {
       'dsa': 'dsa',
+      'interview': 'interview',
+      'bot-interview': 'interview',
+      'ai-interview': 'interview',
+      'technical-interview': 'interview',
+      'interview-ready': 'interview',
       'data-structures': 'dsa',
       'algorithms': 'dsa',
       'data-structures-algorithms': 'dsa',
@@ -401,7 +407,7 @@ STRICT REQUIREMENTS:
     if (!this.promptsLoaded) {
       this.loadPrompts();
     }
-    return ['dsa'];
+    return ['dsa', 'interview'];
   }
 
   /**

@@ -348,6 +348,209 @@
         color: white;
       }
 
+      /* Custom Language Dropdown with 3-second Hover Dwell */
+      .language-selector-wrapper {
+        position: relative;
+        cursor: default;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 7px;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        color: rgba(255, 255, 255, 0.92);
+        font-size: 11px;
+        font-weight: 600;
+        user-select: none;
+        -webkit-app-region: no-drag;
+        transition: all 0.2s ease;
+      }
+      .language-selector-wrapper:hover {
+        background: rgba(255, 255, 255, 0.14);
+        border-color: rgba(255, 255, 255, 0.28);
+        color: #fff;
+      }
+      .language-caret {
+        font-size: 8px;
+        opacity: 0.7;
+        transition: transform 0.2s ease;
+      }
+      .language-selector-wrapper.is-open .language-caret {
+        transform: rotate(180deg);
+      }
+      .language-dropdown-list {
+        position: absolute;
+        top: 36px;
+        left: 0;
+        background: linear-gradient(
+          135deg,
+          rgba(20, 20, 25, 0.95) 0%,
+          rgba(10, 10, 15, 0.92) 100%
+        );
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 8px;
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05);
+        color: rgba(255, 255, 255, 0.95);
+        padding: 6px;
+        min-width: 125px;
+        z-index: 1000;
+        -webkit-app-region: no-drag;
+        pointer-events: none;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 120ms ease, visibility 120ms ease, transform 120ms ease;
+        transform: translateY(-4px);
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+      .language-dropdown-list.is-open {
+        pointer-events: auto;
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(0);
+      }
+      .language-option {
+        position: relative;
+        padding: 5px 9px;
+        border-radius: 5px;
+        font-size: 11px;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.85);
+        cursor: pointer !important;
+        pointer-events: auto !important;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        overflow: hidden;
+        transition: background 0.15s ease, color 0.15s ease;
+        user-select: none;
+      }
+      .language-option * {
+        pointer-events: none !important;
+      }
+      .language-option:hover {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+      }
+      .language-option.active {
+        color: #60a5fa;
+        font-weight: 700;
+        background: rgba(96, 165, 250, 0.15);
+      }
+      .language-option.active::after {
+        content: '✓';
+        font-size: 10px;
+        color: #60a5fa;
+        margin-left: 6px;
+      }
+      .lang-dwell-track {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 2.5px;
+        background: rgba(255, 255, 255, 0.15);
+        display: none;
+        pointer-events: none !important;
+      }
+      .lang-dwell-fill {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #60a5fa, #34d399);
+        box-shadow: 0 0 6px rgba(96, 165, 250, 0.8);
+        pointer-events: none !important;
+      }
+      .language-option.dwelling .lang-dwell-track {
+        display: block;
+      }
+
+      /* ── Alternate Theme: Light Mode (Blends into White Backgrounds) ── */
+      body.theme-light {
+        color: #0f172a;
+      }
+      .command-tab.theme-light {
+        background: rgba(255, 255, 255, 0.88) !important;
+        border: 1px solid rgba(0, 0, 0, 0.14) !important;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.05) !important;
+        color: #0f172a !important;
+      }
+      .command-tab.theme-light .command-item {
+        color: rgba(15, 23, 42, 0.85) !important;
+      }
+      .command-tab.theme-light .command-item:hover {
+        background: rgba(0, 0, 0, 0.06) !important;
+        color: #000000 !important;
+      }
+      .command-tab.theme-light .command-separator {
+        background: rgba(0, 0, 0, 0.12) !important;
+      }
+      .command-tab.theme-light .opacity-control {
+        color: rgba(15, 23, 42, 0.75) !important;
+      }
+      .command-tab.theme-light .opacity-control input[type="range"] {
+        background: rgba(0, 0, 0, 0.12) !important;
+      }
+      .command-tab.theme-light .opacity-control input[type="range"]::-webkit-slider-thumb {
+        background: #ffffff !important;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35) !important;
+        border: 1px solid rgba(0, 0, 0, 0.18) !important;
+      }
+      .command-tab.theme-light .language-dropdown-list {
+        background: rgba(255, 255, 255, 0.96) !important;
+        border: 1px solid rgba(0, 0, 0, 0.15) !important;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06) !important;
+        color: #0f172a !important;
+      }
+      .command-tab.theme-light .language-option {
+        color: rgba(15, 23, 42, 0.85) !important;
+      }
+      .command-tab.theme-light .language-option:hover {
+        background: rgba(0, 0, 0, 0.06) !important;
+        color: #000000 !important;
+      }
+      .command-tab.theme-light .language-option.active {
+        color: #2563eb !important;
+        background: rgba(37, 99, 235, 0.1) !important;
+      }
+      .command-tab.theme-light .language-option.active::after {
+        color: #2563eb !important;
+      }
+      .command-tab.theme-light .rubic-dwell-bg {
+        stroke: rgba(0, 0, 0, 0.12) !important;
+      }
+      .command-tab.theme-light .rubic-dwell-progress {
+        stroke: #0284c7 !important;
+      }
+      .command-tab.theme-light .rubic-mini-toggle {
+        color: rgba(15, 23, 42, 0.8) !important;
+        border: 1px solid rgba(0, 0, 0, 0.2) !important;
+        background: rgba(0, 0, 0, 0.04) !important;
+      }
+      .command-tab.theme-light .rubic-mini-toggle:hover {
+        background: rgba(0, 0, 0, 0.09) !important;
+        color: #000000 !important;
+      }
+      .command-tab.theme-light .rubic-mini-toggle.active {
+        color: #0284c7 !important;
+        border-color: rgba(2, 132, 199, 0.6) !important;
+        background: rgba(2, 132, 199, 0.15) !important;
+      }
+      .command-tab.theme-light .rubic-answer-box {
+        background: rgba(255, 255, 255, 0.95) !important;
+        border: 1px solid rgba(2, 132, 199, 0.4) !important;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1) !important;
+      }
+      .command-tab.theme-light .rubic-answer-box .ans-label {
+        color: rgba(15, 23, 42, 0.65) !important;
+      }
+      .command-tab.theme-light .rubic-answer-box .ans-val {
+        color: #0284c7 !important;
+      }
+
       @keyframes pulse {
         0% {
           opacity: 1;
@@ -609,7 +812,78 @@
         cursor: default !important;
       }
 
+      /* Hover-Dwell Drag & Drop Progress Bar */
+      .hover-drag-progress-bar {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: rgba(255, 255, 255, 0.08);
+        border-bottom-left-radius: 8px;
+        border-bottom-right-radius: 8px;
+        overflow: hidden;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.2s ease;
+        z-index: 200;
+      }
+
+      .hover-drag-progress-bar.is-visible {
+        opacity: 1;
+      }
+
+      .hover-drag-progress-fill {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #38bdf8, #818cf8, #34d399);
+        box-shadow: 0 0 10px rgba(56, 189, 248, 0.9);
+        transition: width 0.05s linear;
+      }
+
+      .hover-drag-status-badge {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        right: 0;
+        background: rgba(15, 23, 42, 0.92);
+        border: 1px solid rgba(56, 189, 248, 0.45);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(12px);
+        color: #38bdf8;
+        font-size: 10px;
+        font-weight: 600;
+        padding: 3px 8px;
+        border-radius: 5px;
+        pointer-events: none;
+        opacity: 0;
+        transform: translateY(4px);
+        transition: opacity 0.2s ease, transform 0.2s ease;
+        white-space: nowrap;
+        z-index: 201;
+      }
+
+      .hover-drag-status-badge.is-visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .command-tab.is-hooked-dragging {
+        border-color: rgba(56, 189, 248, 0.7) !important;
+        box-shadow: 0 0 18px rgba(56, 189, 248, 0.4) !important;
+      }
+
+      .command-tab.is-hooked-dragging .bar-resize-handle::after {
+        border-color: #38bdf8 !important;
+        animation: pulse-handle 0.8s infinite alternate ease-in-out;
+      }
+
+      @keyframes pulse-handle {
+        from { transform: scale(1); opacity: 0.6; }
+        to { transform: scale(1.4); opacity: 1; }
+      }
+
       /* Minimal MCQ Mode vs Expanded Mode */
+      .extended-prefix-group,
       .extended-tools-group {
         display: inline-flex;
         align-items: center;
@@ -618,6 +892,7 @@
         transition: opacity 0.2s ease;
       }
 
+      .command-tab.is-minimal .extended-prefix-group,
       .command-tab.is-minimal .extended-tools-group {
         display: none !important;
       }
@@ -862,16 +1137,19 @@
   </head>
   <body>
     <div class="command-tab is-minimal">
-      <div class="command-item" id="screenshotButton">
-        <i class="fas fa-camera"></i>
-        <span>⌘⇧S</span>
+      <!-- Prefix tools: Snapshot & MCQ (Hidden in minimal mode, shown in expanded mode) -->
+      <div class="extended-prefix-group" id="extendedPrefixGroup">
+        <div class="command-item" id="screenshotButton">
+          <i class="fas fa-camera"></i>
+          <span>⌘⇧S</span>
+        </div>
+        <div class="command-separator"></div>
+        <div class="command-item" id="mcqToggle">
+          <i class="fas fa-list-check"></i>
+          <span>MCQ</span>
+        </div>
+        <div class="command-separator"></div>
       </div>
-      <div class="command-separator"></div>
-      <div class="command-item" id="mcqToggle">
-        <i class="fas fa-list-check"></i>
-        <span>MCQ</span>
-      </div>
-      <div class="command-separator"></div>
       <!-- Rubic Universal MCQ Button -->
       <div class="command-item" id="rubicButton" style="position: relative;">
         <div class="ai-status-dot disconnected" id="aiStatusDot"></div>
@@ -912,23 +1190,49 @@
         </div>
         <div class="command-separator"></div>
         <div class="command-item" id="micButton">
-          <i class="fas fa-microphone"></i>
+          <i class="fas fa-microphone" id="micButtonIcon"></i>
         </div>
         <div class="command-separator"></div>
         <div class="command-item" id="skillIndicator">
-          <i class="fas fa-brain"></i>
-          <span>DSA</span>
+          <i class="fas fa-user-tie"></i>
+          <span>Interview</span>
         </div>
         <div class="command-separator"></div>
-        <div class="command-item" id="languageSelector">
+        <div class="command-item language-selector-wrapper" id="languageSelector" title="Click or hover 3s to choose programming language">
           <i class="fas fa-code"></i>
-          <select id="codingLanguage">
+          <span id="currentLanguageLabel">C++</span>
+          <i class="fas fa-chevron-down language-caret"></i>
+          <!-- Hidden select keeps setting synchronization 100% compatible -->
+          <select id="codingLanguage" style="display: none;">
             <option value="cpp">C++</option>
             <option value="c">C</option>
             <option value="python">Python</option>
             <option value="java">Java</option>
             <option value="javascript">JavaScript</option>
           </select>
+          <!-- Custom Hover 3-Second Selection Dropdown List -->
+          <div class="language-dropdown-list" id="languageDropdownList">
+            <div class="language-option active" data-value="cpp">
+              <span class="lang-text">C++</span>
+              <div class="lang-dwell-track"><div class="lang-dwell-fill"></div></div>
+            </div>
+            <div class="language-option" data-value="c">
+              <span class="lang-text">C</span>
+              <div class="lang-dwell-track"><div class="lang-dwell-fill"></div></div>
+            </div>
+            <div class="language-option" data-value="python">
+              <span class="lang-text">Python</span>
+              <div class="lang-dwell-track"><div class="lang-dwell-fill"></div></div>
+            </div>
+            <div class="language-option" data-value="java">
+              <span class="lang-text">Java</span>
+              <div class="lang-dwell-track"><div class="lang-dwell-fill"></div></div>
+            </div>
+            <div class="language-option" data-value="javascript">
+              <span class="lang-text">JavaScript</span>
+              <div class="lang-dwell-track"><div class="lang-dwell-fill"></div></div>
+            </div>
+          </div>
         </div>
         <div class="command-separator"></div>
         <div class="command-item" id="targetModeBtn">
@@ -938,20 +1242,31 @@
           <i class="fas fa-clipboard-list"></i>
         </div>
         <div class="command-separator"></div>
-        <div class="command-item" id="infoButton">
+        <div class="command-item" id="infoButton" title="Info / Shortcuts">
           <i class="fas fa-circle-info"></i>
         </div>
         <div class="command-separator"></div>
-        <div class="opacity-control" id="opacityControl">
-          <i class="fas fa-eye-low-vision"></i>
-          <input type="range" id="opacitySlider" min="0" max="100" value="38" step="1" />
+        <div class="command-item" id="themeToggleBtn" title="Theme (Dark / Light) — Click or hover 3s">
+          <i class="fas fa-sun" id="themeToggleIcon"></i>
         </div>
+      </div>
+      <!-- Transparency slider (Always visible: after Hide in minimal mode, after extended tools in expanded mode) -->
+      <div class="command-separator"></div>
+      <div class="opacity-control" id="opacityControl">
+        <i class="fas fa-eye-low-vision"></i>
+        <input type="range" id="opacitySlider" min="0" max="100" value="38" step="1" />
       </div>
       <!-- Expand / Collapse button (Click or Hover 3s) at bottom-right corner -->
       <div class="command-item expand-bar-btn" id="expandBarBtn" style="position: relative;">
         <i class="fas fa-chevron-right" id="expandBarIcon"></i>
       </div>
-      <div class="bar-resize-handle" id="barResizeHandle"></div>
+      <div class="bar-resize-handle" id="barResizeHandle" title="Hold cursor here for 3s to drag bar without clicking"></div>
+      <!-- Hover-Dwell Drag & Drop Progress Bar -->
+      <div class="hover-drag-progress-bar" id="hoverDragProgressBar">
+        <div class="hover-drag-progress-fill" id="hoverDragProgressFill"></div>
+      </div>
+      <!-- Floating Hover Drag Status Tooltip -->
+      <div class="hover-drag-status-badge" id="hoverDragStatusBadge"></div>
     </div>
 
   <!-- Shortcuts Popover (hidden by default via CSS) -->

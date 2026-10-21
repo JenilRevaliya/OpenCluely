@@ -1,16 +1,25 @@
+const EventEmitter = require('events');
 const { GoogleGenAI } = require('@google/genai');
 const logger = require('../core/logger').createServiceLogger('LLM');
 const config = require('../core/config');
 const { promptLoader } = require('../../prompt-loader');
 
-class LLMService {
+class LLMService extends EventEmitter {
   constructor() {
+    super();
     this.client = null;
     this.model = null;
     this.isInitialized = false;
     this.isMcqMode = false;
     this.requestCount = 0;
     this.errorCount = 0;
+    
+    // Dynamic Health & Diagnostic tracking
+    this.keyHealth = {}; // keyIndex -> { consecutiveErrors, lastError, lastSuccess, latencyMs, ttftMs, successfulModel, isHealthy }
+    this.preferredKeyIndex = 0;
+    this.diagnosticEvents = []; // rolling 50 items
+    this.lastLatency = null;
+    this.lastTtft = null;
     
     this.initializeClient();
   }
@@ -67,6 +76,270 @@ class LLMService {
         error: error.message 
       });
     }
+  }
+
+  /**
+   * Warm up LLM connection, HTTPS keep-alive socket, and verify API keys
+   * as soon as the mic is enabled. Eliminates cold-start TLS handshake latency.
+   */
+  async warmup() {
+    if (!this.isInitialized) {
+      this.initializeClient();
+    }
+    const apiKeys = config.getApiKeys('GEMINI');
+    if (!apiKeys || apiKeys.length === 0) {
+      return { ok: false, reason: 'No Gemini API keys configured' };
+    }
+    const model = config.get('llm.gemini.model') || this.model || 'gemini-3-flash-preview';
+    const primaryKey = apiKeys[this.preferredKeyIndex] || apiKeys[0];
+
+    this.emitDebugStatus({
+      phase: 'ready',
+      keyIndex: this.preferredKeyIndex + 1,
+      model,
+      status: 'Priming LLM connection & sockets...'
+    });
+
+    try {
+      const https = require('https');
+      const req = https.request({
+        hostname: 'generativelanguage.googleapis.com',
+        port: 443,
+        path: `/v1beta/models?pageSize=1&key=${primaryKey}`,
+        method: 'GET',
+        headers: {
+          'Connection': 'keep-alive',
+          'User-Agent': 'Cluely-Prewarm/1.0'
+        },
+        timeout: 3000
+      }, (res) => {
+        res.resume();
+        logger.info('LLM API connection primed & warmed up', {
+          statusCode: res.statusCode,
+          model,
+          keyIndex: this.preferredKeyIndex + 1
+        });
+        this.emitDebugStatus({
+          phase: 'ready',
+          keyIndex: this.preferredKeyIndex + 1,
+          model,
+          status: 'LLM APIs primed & ready'
+        });
+      });
+      req.on('error', (err) => {
+        logger.debug('LLM warmup ping notice (non-fatal)', { error: err.message });
+      });
+      req.on('timeout', () => req.destroy());
+      req.end();
+      return { ok: true, model };
+    } catch (err) {
+      logger.debug('LLM warmup error (non-fatal)', { error: err.message });
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * Emit real-time debug telemetry to all listeners (and store rolling history)
+   * @param {Object} data 
+   */
+  emitDebugStatus(data) {
+    const event = {
+      ...data,
+      timestamp: Date.now()
+    };
+    this.diagnosticEvents.unshift(event);
+    if (this.diagnosticEvents.length > 50) {
+      this.diagnosticEvents.pop();
+    }
+    this.emit('debug-status', event);
+  }
+
+  /**
+   * Return key indices ordered by recent health and success
+   * @param {number} totalKeys 
+   * @returns {number[]}
+   */
+  getOrderedKeyIndices(totalKeys) {
+    if (totalKeys <= 1) return [0];
+    const now = Date.now();
+    const indices = [];
+    for (let i = 0; i < totalKeys; i++) {
+      const kh = this.keyHealth[i];
+      const isRateLimited = kh && kh.rateLimitedUntil && kh.rateLimitedUntil > now;
+      indices.push({ index: i, isRateLimited: !!isRateLimited, isPref: i === this.preferredKeyIndex });
+    }
+    indices.sort((a, b) => {
+      if (a.isRateLimited !== b.isRateLimited) return a.isRateLimited ? 1 : -1;
+      if (a.isPref !== b.isPref) return a.isPref ? -1 : 1;
+      return a.index - b.index;
+    });
+    return indices.map(item => item.index);
+  }
+
+  /**
+   * Mark a key and model as currently healthy and successful
+   */
+  markKeySuccess(keyIndex, modelName, latencyMs, ttftMs) {
+    this.keyHealth[keyIndex] = {
+      consecutiveErrors: 0,
+      lastSuccess: Date.now(),
+      lastError: null,
+      successfulModel: modelName,
+      latencyMs: latencyMs || null,
+      ttftMs: ttftMs || null,
+      isHealthy: true,
+      rateLimitedUntil: null
+    };
+    this.preferredKeyIndex = keyIndex;
+    if (latencyMs) this.lastLatency = latencyMs;
+    if (ttftMs) this.lastTtft = ttftMs;
+  }
+
+  /**
+   * Record error on a key and model, and rotate preferred key if needed
+   */
+  markKeyError(keyIndex, modelName, errorMessage, totalKeys) {
+    const kh = this.keyHealth[keyIndex] || { consecutiveErrors: 0 };
+    kh.consecutiveErrors = (kh.consecutiveErrors || 0) + 1;
+    kh.lastError = errorMessage;
+    kh.lastErrorTime = Date.now();
+    kh.isHealthy = false;
+
+    const isQuotaOrRateLimit = errorMessage && (
+      errorMessage.includes('429') ||
+      errorMessage.includes('RESOURCE_EXHAUSTED') ||
+      errorMessage.includes('quota') ||
+      errorMessage.includes('rate limit')
+    );
+    if (isQuotaOrRateLimit) {
+      kh.rateLimitedUntil = Date.now() + 180000; // 3 min backoff
+    }
+
+    this.keyHealth[keyIndex] = kh;
+
+    if (totalKeys && totalKeys > 1 && this.preferredKeyIndex === keyIndex) {
+      this.preferredKeyIndex = (keyIndex + 1) % totalKeys;
+    }
+  }
+
+  /**
+   * Get complete dynamic diagnostic snapshot of LLM engine
+   */
+  getDiagnostics() {
+    const apiKeys = config.getApiKeys('GEMINI');
+    const primaryModel = config.get('llm.gemini.model') || this.model;
+    const fallbackModels = config.get('llm.gemini.fallbackModels') || [];
+
+    const keysStatus = apiKeys.map((k, idx) => {
+      const h = this.keyHealth[idx] || {};
+      return {
+        keyIndex: idx + 1,
+        prefix: k ? `${k.substring(0, 6)}...${k.substring(k.length - 4)}` : 'missing',
+        isPreferred: idx === this.preferredKeyIndex,
+        isHealthy: h.isHealthy !== false,
+        consecutiveErrors: h.consecutiveErrors || 0,
+        lastError: h.lastError || null,
+        lastSuccess: h.lastSuccess || null,
+        latencyMs: h.latencyMs || null,
+        ttftMs: h.ttftMs || null,
+        successfulModel: h.successfulModel || null
+      };
+    });
+
+    return {
+      activeModel: primaryModel,
+      fallbackModels,
+      preferredKeyIndex: this.preferredKeyIndex + 1,
+      keys: keysStatus,
+      lastLatency: this.lastLatency,
+      lastTtft: this.lastTtft,
+      requestCount: this.requestCount,
+      errorCount: this.errorCount,
+      recentEvents: this.diagnosticEvents.slice(0, 20)
+    };
+  }
+
+  /**
+   * Run an active live probe across all configured keys and models
+   */
+  async runLiveDiagnosticsProbe() {
+    const https = require('https');
+    const apiKeys = config.getApiKeys('GEMINI');
+    const primaryModel = config.get('llm.gemini.model') || 'gemini-3-flash-preview';
+    const fallbackModels = config.get('llm.gemini.fallbackModels') || [];
+    const modelsToTest = [primaryModel, ...fallbackModels.filter(m => m !== primaryModel)];
+
+    const results = [];
+    const probeStartTime = Date.now();
+
+    for (let kIdx = 0; kIdx < apiKeys.length; kIdx++) {
+      const key = apiKeys[kIdx];
+      for (const model of modelsToTest) {
+        const t0 = Date.now();
+        const probeResult = await new Promise((resolve) => {
+          const postData = JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: 'Ping' }] }],
+            generationConfig: { maxOutputTokens: 5 }
+          });
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+          const req = https.request(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-key': key,
+              'Content-Length': Buffer.byteLength(postData)
+            },
+            timeout: 4000
+          }, (res) => {
+            let body = '';
+            res.on('data', d => body += d);
+            res.on('end', () => {
+              const latency = Date.now() - t0;
+              resolve({
+                keyIndex: kIdx + 1,
+                model,
+                status: res.statusCode,
+                latencyMs: latency,
+                ok: res.statusCode === 200,
+                error: res.statusCode === 200 ? null : `HTTP ${res.statusCode}`
+              });
+            });
+          });
+          req.on('error', (err) => resolve({
+            keyIndex: kIdx + 1,
+            model,
+            status: null,
+            latencyMs: Date.now() - t0,
+            ok: false,
+            error: err.message
+          }));
+          req.on('timeout', () => {
+            req.destroy();
+            resolve({
+              keyIndex: kIdx + 1,
+              model,
+              status: null,
+              latencyMs: Date.now() - t0,
+              ok: false,
+              error: 'TIMEOUT (4s)'
+            });
+          });
+          req.write(postData);
+          req.end();
+        });
+        results.push(probeResult);
+      }
+    }
+
+    return {
+      timestamp: Date.now(),
+      totalProbeDurationMs: Date.now() - probeStartTime,
+      matrix: results,
+      preferredKeyIndex: this.preferredKeyIndex + 1,
+      recommendation: results.find(r => r.ok && r.latencyMs < 2500) 
+        ? `Fastest responsive model: ${results.find(r => r.ok && r.latencyMs < 2500).model} on Key #${results.find(r => r.ok && r.latencyMs < 2500).keyIndex} (${results.find(r => r.ok && r.latencyMs < 2500).latencyMs}ms)`
+        : 'All tested models are experiencing latency or rate limits.'
+    };
   }
 
   getGenerationConfig(overrides = {}) {
@@ -701,8 +974,19 @@ class LLMService {
 
     this.applyGenerationDefaults(request);
 
-    // Use the skill prompt from context (which may already include programming language)
+    // Use the skill prompt from context
     let promptText = skillContext.skillPrompt;
+
+    // If activeSkill is interview OR query is an interview/resume/conceptual question,
+    // use the Jenil Soni master interview prompt so typed messages get authoritative resume answers!
+    const isInterview = (activeSkill === 'interview' || this.isInterviewOrConceptualQuery(text, activeSkill));
+    if (isInterview) {
+      const interviewPrompt = promptLoader.getSkillPrompt('interview', programmingLanguage, this.isMcqMode);
+      if (interviewPrompt) {
+        promptText = interviewPrompt;
+      }
+    }
+
     if (this.isMcqMode && promptText && !promptText.includes('MANDATORY MCQ MODE ACTIVE')) {
       const { promptLoader } = require('../../prompt-loader');
       promptText = promptLoader.injectMcqInstructions(promptText);
@@ -715,6 +999,7 @@ class LLMService {
       
       logger.debug('Using skill context prompt as system instruction', {
         skill: activeSkill,
+        isInterview,
         programmingLanguage: programmingLanguage || 'not specified',
         isMcqMode: this.isMcqMode,
         promptLength: promptText.length,
@@ -790,7 +1075,7 @@ class LLMService {
     this.applyGenerationDefaults(request);
 
     // Add intelligent filtering system instruction
-    const intelligentPrompt = this.getIntelligentTranscriptionPrompt(activeSkill, programmingLanguage);
+    const intelligentPrompt = this.getIntelligentTranscriptionPrompt(activeSkill, programmingLanguage, cleanText);
     if (!intelligentPrompt) {
       throw new Error('Failed to generate intelligent transcription prompt');
     }
@@ -819,11 +1104,25 @@ class LLMService {
       contents: []
     };
 
-    this.applyGenerationDefaults(request);
+    // Validate and clean text first
+    const cleanText = text && typeof text === 'string' ? text.trim() : '';
+    if (!cleanText) {
+      throw new Error('Empty or invalid transcription text provided');
+    }
 
-  // For chat/transcription messages, DO NOT include the full skill prompt; use only the intelligent filter prompt
-  const intelligentPrompt = this.getIntelligentTranscriptionPrompt(activeSkill, programmingLanguage);
-  request.systemInstruction = { parts: [{ text: intelligentPrompt }] };
+    const isInterview = (activeSkill === 'interview' || this.isInterviewOrConceptualQuery(cleanText, activeSkill));
+    this.applyGenerationDefaults(request, isInterview 
+      ? { 
+          maxOutputTokens: 1200, 
+          temperature: 0.15,
+          thinkingConfig: { thinkingBudget: 0 }
+        } 
+      : {}
+    );
+
+    // For chat/transcription messages, use the intelligent prompt tuned with question text
+    const intelligentPrompt = this.getIntelligentTranscriptionPrompt(activeSkill, programmingLanguage, cleanText);
+    request.systemInstruction = { parts: [{ text: intelligentPrompt }] };
 
     // Add recent conversation history (excluding system messages) with validation
     const conversationContents = conversationHistory
@@ -834,7 +1133,7 @@ class LLMService {
                typeof event.content === 'string' && 
                event.content.trim().length > 0;
       })
-      .slice(-8) // Keep last 8 exchanges for context
+      .slice(-4) // Keep recent 2 exchanges (4 turns) for ultra-fast TTFT and prompt prefill
       .map(event => {
         const content = event.content.trim();
         if (!content) {
@@ -848,15 +1147,33 @@ class LLMService {
       })
       .filter(content => content !== null); // Remove any null entries
 
-    // Add the conversation history
-    request.contents.push(...conversationContents);
-
-    // Validate and add the current transcription
-    const cleanText = text && typeof text === 'string' ? text.trim() : '';
-    if (!cleanText) {
-      throw new Error('Empty or invalid transcription text provided');
+    // Strict multi-turn alternation enforcement for Gemini v1beta API:
+    // 1. Alternation must be strict: user -> model -> user -> model
+    // 2. Consecutive entries of the same role must be merged into a single turn
+    // 3. Since cleanText is appended as the new 'user' turn, the history MUST end in 'model'
+    const sanitizedHistory = [];
+    for (const item of conversationContents) {
+      if (sanitizedHistory.length === 0) {
+        sanitizedHistory.push({ role: item.role, parts: [{ text: item.parts[0].text }] });
+      } else {
+        const lastEntry = sanitizedHistory[sanitizedHistory.length - 1];
+        if (lastEntry.role === item.role) {
+          lastEntry.parts[0].text += `\n${item.parts[0].text}`;
+        } else {
+          sanitizedHistory.push({ role: item.role, parts: [{ text: item.parts[0].text }] });
+        }
+      }
     }
 
+    // Never let history end on 'user' right before we push our new user prompt
+    while (sanitizedHistory.length > 0 && sanitizedHistory[sanitizedHistory.length - 1].role === 'user') {
+      sanitizedHistory.pop();
+    }
+
+    // Add the sanitized conversation history
+    request.contents.push(...sanitizedHistory);
+
+    // Add the current transcription as the active user turn
     request.contents.push({
       role: 'user',
       parts: [{ text: cleanText }]
@@ -880,12 +1197,43 @@ class LLMService {
     return request;
   }
 
-  getIntelligentTranscriptionPrompt(activeSkill, programmingLanguage) {
-    let prompt = `# Intelligent Transcription Response System
+  isInterviewOrConceptualQuery(text, activeSkill) {
+    if (activeSkill === 'interview') return true;
+    if (!text || typeof text !== 'string') return false;
+    const lower = text.toLowerCase();
 
-Assume you are asked a question in ${activeSkill.toUpperCase()} mode. Your job is to intelligently respond to question/message with appropriate brevity.
-Assume you are in an interview and you need to perform best in ${activeSkill.toUpperCase()} mode.
-Always respond to the point, do not repeat the question or unnecessary information which is not related to ${activeSkill}.`;
+    // High-confidence interview / resume / architectural intent keywords
+    const interviewKeywords = [
+      'yourself', 'introduce', 'resume', 'experience', 'background', 'project',
+      'vedprada', 'clinicos', 'airsight', 'cctv', 'surveillance', 'rec', 'manjushri',
+      'brainy', 'why should', 'hire you', 'tell me about', 'strength', 'weakness',
+      'conflict', 'challenge', 'situation', 'achieve', 'achievement', 'role',
+      'education', 'college', 'degree', 'indus', 'b.tech', 'polytechnic', 'certification',
+      'who are you', 'what is your name', 'your stack', 'work with', 'tell us',
+      'difference between', 'what is', 'how does', 'explain', 'architecture',
+      'system design', 'rest api', 'fastapi', 'express', 'postgres', 'postgresql',
+      'redis', 'docker', 'onnx', 'yolo', 'opencv', 'mediapipe', 'rbac', 'abac',
+      'database', 'indexing', 'acid', 'microservices', 'embeddings', 'similarity',
+      'walk me through', 'portfolio', 'interview'
+    ];
+
+    return interviewKeywords.some(kw => lower.includes(kw));
+  }
+
+  getIntelligentTranscriptionPrompt(activeSkill, programmingLanguage, text = '') {
+    const isInterview = (activeSkill === 'interview' || this.isInterviewOrConceptualQuery(text, activeSkill));
+    if (isInterview) {
+      const interviewPrompt = promptLoader.getSkillPrompt('interview', programmingLanguage, this.isMcqMode);
+      if (interviewPrompt) {
+        return interviewPrompt;
+      }
+    }
+
+    let prompt = `# Intelligent Technical Co-Pilot Response System
+
+Assume you are asked a question in ${activeSkill.toUpperCase()} mode. Your job is to intelligently respond to the question/message with appropriate brevity.
+Assume you are in an interview and you need to perform at the highest professional level.
+Always respond directly to the point. Do not repeat the question or produce unnecessary filler.`;
 
     // Add programming language context if provided
     if (programmingLanguage) {
@@ -894,40 +1242,36 @@ Always respond to the point, do not repeat the question or unnecessary informati
       const fenceTagMap = { cpp: 'cpp', c: 'c', python: 'python', java: 'java', javascript: 'javascript', js: 'javascript' };
       const languageTitle = languageMap[lang] || (lang.charAt(0).toUpperCase() + lang.slice(1));
       const fenceTag = fenceTagMap[lang] || lang || 'text';
-      prompt += `\n\nCODING CONTEXT: Respond ONLY in ${languageTitle}. All code blocks must use triple backticks with language tag \`\`\`${fenceTag}\`\`\`. Do not include other languages unless explicitly asked.`;
+      prompt += `\n\nCODING CONTEXT: When producing code, respond ONLY in ${languageTitle}. All code blocks must use triple backticks with language tag \`\`\`${fenceTag}\`\`\`. Do not include other languages unless explicitly asked.`;
     }
 
     prompt += `
 
 ## Response Rules:
 
-### If the transcription is casual conversation, greetings, or NOT related to ${activeSkill}:
-- Respond with: "Yeah, I'm listening. Ask your question relevant to ${activeSkill}."
-- Or similar brief acknowledgments like: "I'm here, what's your ${activeSkill} question?"
+### If the question is conversational, conceptual, architectural, or about experience:
+- Use clear, natural 8th to 10th grade spoken English with essential technical accuracy.
+- EXACT TEMPLATE:
+❓ Question: [3 to 6 words summary of question]
+🗣️ Start with: [1 natural opening definition or sentence in 8th-10th grade English that the user can immediately say out loud]
+⚡ Talking Points:
+• [1 simple sentence with crucial anchor phrases in brackets like [B-Tree structure] or [O(log N) lookups]]
+• [1 simple sentence explaining benefit or trade-off with [key phrases]]
+• [1 simple sentence explaining practical implementation with [key phrases]]
+🎯 Key-Value Insights:
+• Advantages: [Specific speed or throughput benefit statement]
+• Trade-offs: [Specific write overhead or memory trade-off statement]
+• Real-Life Example: [Concrete metric from ClinicOS / Vedprada / REC / AI CCTV]
+• Our Approach: [Specific engineering approach or pitfall to avoid]
+- Do NOT output code snippets or templates for conceptual, behavioral, or general questions!
+- Single-view fit: keep compact under 180 words so it fits in the overlay window without scrolling.
 
-### If the transcription IS relevant to ${activeSkill} or is a follow-up question:
-- Provide a comprehensive, detailed response
-- Use bullet points, examples, and explanations
-- Focus on actionable insights and complete answers
-- Do not truncate or shorten your response
+### If the question is explicitly a coding problem, algorithmic challenge, or DSA statement:
+- State optimal time and space complexity.
+- Produce a clean, optimal, runnable implementation in the selected programming language in a properly tagged code block without comments.
 
-### Examples of casual/irrelevant messages:
-- "Hello", "Hi there", "How are you?"
-- "What's the weather like?"
-- "I'm just testing this"
-- Random conversations not related to ${activeSkill}
-
-### Examples of relevant messages:
-- Actual questions about ${activeSkill} concepts
-- Follow-up questions to previous responses
-- Requests for clarification on ${activeSkill} topics
-- Problem-solving requests related to ${activeSkill}
-
-## Response Format:
-- Keep responses detailed
-- Use bullet points for structured answers
-- Be encouraging and helpful
-- Stay focused on ${activeSkill}`;
+### If casual greeting:
+- Respond briefly and professionally: "Hello! I am ready to answer your technical and interview questions."`;
 
     if (this.isMcqMode) {
       prompt += `\n\n## MANDATORY MCQ MODE ACTIVE:
@@ -936,12 +1280,6 @@ Select the single BEST choice answer option immediately and start with:
 **Correct Option: [Option Letter] - [Option Text]**
 Follow with a crisp 2-3 bullet point justification.`;
     }
-
-    prompt += `
-
-If the user's input is a coding or DSA problem statement and contains no code, produce a complete, runnable solution in the selected programming language without asking for more details. Always include the final implementation in a properly tagged code block.
-
-Remember: Be intelligent about filtering - only provide detailed responses when the user actually needs help with ${activeSkill}.`;
 
     return prompt;
   }
@@ -1093,9 +1431,15 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
    * {response, metadata} shape. Falls back to the non-streaming path on any
    * streaming failure so reliability is never worse than before.
    */
-  async processTranscriptionWithIntelligentResponseStream(text, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null) {
+  async processTranscriptionWithIntelligentResponseStream(text, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null, abortSignal = null) {
     if (!this.isInitialized) {
       throw new Error('LLM service not initialized. Check Gemini API key configuration.');
+    }
+
+    if (abortSignal && abortSignal.aborted) {
+      const abortErr = new Error('ABORTED');
+      abortErr.name = 'AbortError';
+      throw abortErr;
     }
 
     const startTime = Date.now();
@@ -1108,7 +1452,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
         if (typeof onDelta === 'function' && delta) {
           onDelta(delta);
         }
-      });
+      }, abortSignal);
 
       const finalResponse = programmingLanguage
         ? this.enforceProgrammingLanguage(fullText, programmingLanguage)
@@ -1134,6 +1478,13 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
         }
       };
     } catch (error) {
+      if (abortSignal && (abortSignal.aborted || error.message === 'ABORTED' || error.name === 'AbortError')) {
+        logger.info('Streaming transcription was aborted/preempted by new question', {
+          requestId: this.requestCount
+        });
+        throw error;
+      }
+
       logger.warn('Streaming transcription failed, falling back to non-streaming', {
         error: error.message,
         requestId: this.requestCount
@@ -1166,73 +1517,142 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
   /**
    * Run a streaming Gemini request with the same model-fallback + retry policy
    * as executeRequest. Accumulates and returns the full text; invokes onDelta
-   * for each chunk.
+   * for each chunk. Supports abortSignal for instantaneous question preemption.
    */
-  async executeStreamingRequest(geminiRequest, onDelta) {
-    const maxRetries = config.get('llm.gemini.maxRetries');
-    const apiKey = config.getApiKey('GEMINI');
-    const primaryModel = this.model;
-    const fallbackModels = config.get('llm.gemini.fallbackModels') || [];
-    const modelsToTry = [primaryModel, ...fallbackModels];
+  async executeStreamingRequest(geminiRequest, onDelta, abortSignal = null) {
+    const apiKeys = config.getApiKeys('GEMINI');
+    if (!apiKeys || apiKeys.length === 0) {
+      throw new Error('No Gemini API keys configured in .env');
+    }
 
+    if (abortSignal && abortSignal.aborted) {
+      const abortErr = new Error('ABORTED');
+      abortErr.name = 'AbortError';
+      throw abortErr;
+    }
+
+    const maxRetries = config.get('llm.gemini.maxRetries') || 1;
+    const primaryModel = config.get('llm.gemini.model') || this.model || 'gemini-3-flash-preview';
+    const fallbackModels = config.get('llm.gemini.fallbackModels') || [];
+    const modelsToTry = [primaryModel, ...fallbackModels.filter(m => m !== primaryModel)];
+
+    const orderedKeyIndices = this.getOrderedKeyIndices(apiKeys.length);
     let lastError = null;
 
-    for (const modelName of modelsToTry) {
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          const fullText = await this._streamRequestForModel(geminiRequest, modelName, apiKey, onDelta);
+    for (const keyIndex of orderedKeyIndices) {
+      const apiKey = apiKeys[keyIndex];
+      const keyLabel = `Key #${keyIndex + 1}`;
 
-          if (!fullText) {
-            throw new Error('Empty streamed response from Gemini API');
+      for (const modelName of modelsToTry) {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          if (abortSignal && abortSignal.aborted) {
+            const abortErr = new Error('ABORTED');
+            abortErr.name = 'AbortError';
+            throw abortErr;
           }
 
-          logger.debug('Gemini streaming request successful', {
-            attempt,
-            model: modelName,
-            responseLength: fullText.length
-          });
+          const reqStartTime = Date.now();
+          let ttftRecorded = null;
 
-          return fullText;
-        } catch (error) {
-          const errorInfo = this.analyzeError(error);
-          lastError = error;
+          try {
+            this.emitDebugStatus({
+              phase: 'connecting',
+              keyIndex: keyIndex + 1,
+              model: modelName,
+              attempt,
+              status: `Connecting to ${modelName} via ${keyLabel}...`
+            });
 
-          logger.warn(`Gemini streaming attempt ${attempt} failed for model ${modelName}`, {
-            error: error.message,
-            errorType: errorInfo.type,
-            remainingAttempts: maxRetries - attempt,
-            model: modelName
-          });
+            const fullText = await this._streamRequestForModel(
+              geminiRequest,
+              modelName,
+              apiKey,
+              (delta) => {
+                if (ttftRecorded === null) {
+                  ttftRecorded = Date.now() - reqStartTime;
+                  this.emitDebugStatus({
+                    phase: 'streaming',
+                    keyIndex: keyIndex + 1,
+                    model: modelName,
+                    ttftMs: ttftRecorded,
+                    status: `Streaming ${modelName} (TTFT: ${ttftRecorded}ms)`
+                  });
+                }
+                if (typeof onDelta === 'function') {
+                  onDelta(delta);
+                }
+              },
+              abortSignal
+            );
 
-          const isModelUnavailable = errorInfo.type === 'RATE_LIMIT_ERROR' ||
-            error.message.includes('503') ||
-            error.message.includes('UNAVAILABLE') ||
-            error.message.includes('high demand');
+            if (fullText && fullText.trim().length > 0) {
+              const totalLatency = Date.now() - reqStartTime;
+              this.markKeySuccess(keyIndex, modelName, totalLatency, ttftRecorded);
+              this.emitDebugStatus({
+                phase: 'completed',
+                keyIndex: keyIndex + 1,
+                model: modelName,
+                totalLatencyMs: totalLatency,
+                ttftMs: ttftRecorded,
+                status: `Completed ${modelName} in ${totalLatency}ms`
+              });
+              return fullText;
+            }
+          } catch (error) {
+            lastError = error;
 
-          if (isModelUnavailable && modelName !== modelsToTry[modelsToTry.length - 1]) {
-            break; // try next fallback model
+            // If request was preempted/aborted by user/newer question, immediately rethrow without failover
+            if (abortSignal && (abortSignal.aborted || error.message === 'ABORTED' || error.name === 'AbortError')) {
+              throw error;
+            }
+
+            this.errorCount++;
+            this.markKeyError(keyIndex, modelName, error.message, apiKeys.length);
+
+            this.emitDebugStatus({
+              phase: 'failover',
+              keyIndex: keyIndex + 1,
+              model: modelName,
+              error: error.message,
+              status: `${keyLabel} (${modelName}) failed: ${error.message}. Switching...`
+            });
+
+            logger.warn(`Streaming attempt failed (${keyLabel}, model ${modelName})`, {
+              error: error.message,
+              keyIndex: keyIndex + 1,
+              model: modelName
+            });
+
+            const isAuthError = error.message.includes('403') ||
+              error.message.includes('401') ||
+              error.message.includes('API_KEY_INVALID');
+
+            // If the key is permanently unauthorized or invalid, skip remaining models on this key and jump to next key!
+            if (isAuthError && apiKeys.length > 1) {
+              break;
+            }
           }
-
-          if (attempt === maxRetries) {
-            break;
-          }
-
-          const baseDelay = errorInfo.isNetworkError ? 2500 : 1500;
-          const delay = baseDelay * attempt + Math.random() * 1000;
-          await this.delay(delay);
         }
       }
     }
 
-    throw lastError || new Error('Gemini streaming request failed');
+    throw lastError || new Error('Gemini streaming request failed across all available keys and models');
   }
 
-  _streamRequestForModel(geminiRequest, modelName, apiKey, onDelta) {
+  _streamRequestForModel(geminiRequest, modelName, apiKey, onDelta, abortSignal = null) {
     const https = require('https');
-    const timeout = config.get('llm.gemini.timeout');
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse`;
-    const postData = JSON.stringify(geminiRequest);
-    const agent = new https.Agent({ keepAlive: true, maxSockets: 1 });
+    const timeout = Math.max(16000, config.get('llm.gemini.timeout') || 16000);
+    const ttftTimeout = 12000; // Watchdog: allow up to 12s for initial stream chunk on high load
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${apiKey}`;
+    // Strip thinkingConfig from generationConfig — the v1beta REST endpoint does NOT support it
+    // and returns an empty response (no text, no tool calls) when it is present, causing the
+    // "model output must contain either output text or tool calls" error.
+    const safeRequest = geminiRequest.generationConfig && geminiRequest.generationConfig.thinkingConfig
+      ? { ...geminiRequest, generationConfig: (({ thinkingConfig, ...rest }) => rest)(geminiRequest.generationConfig) }
+      : geminiRequest;
+    const postData = JSON.stringify(safeRequest);
+    this._sharedHttpsAgent = this._sharedHttpsAgent || new https.Agent({ keepAlive: true, maxSockets: 10, keepAliveMsecs: 60000 });
+    const agent = this._sharedHttpsAgent;
 
     const options = {
       method: 'POST',
@@ -1247,11 +1667,54 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     };
 
     return new Promise((resolve, reject) => {
+      if (abortSignal && abortSignal.aborted) {
+        const abortErr = new Error('ABORTED');
+        abortErr.name = 'AbortError';
+        return reject(abortErr);
+      }
+
+      let isDone = false;
+      let hasReceivedFirstByte = false;
+
+      const safeReject = (err) => {
+        if (isDone) return;
+        isDone = true;
+        clearTimeout(watchdogTimer);
+        reject(err);
+      };
+
+      const safeResolve = (val) => {
+        if (isDone) return;
+        isDone = true;
+        clearTimeout(watchdogTimer);
+        resolve(val);
+      };
+
+      const watchdogTimer = setTimeout(() => {
+        if (!hasReceivedFirstByte) {
+          try { req.destroy(); } catch (_) {}
+          safeReject(new Error(`TTFT watchdog timeout (${ttftTimeout}ms) for ${modelName}`));
+        }
+      }, ttftTimeout);
+
+      let abortHandler = null;
+      if (abortSignal) {
+        abortHandler = () => {
+          try { req.destroy(); } catch (_) {}
+          const abortErr = new Error('ABORTED');
+          abortErr.name = 'AbortError';
+          safeReject(abortErr);
+        };
+        abortSignal.addEventListener('abort', abortHandler, { once: true });
+      }
+
       const req = https.request(url, options, (res) => {
+        clearTimeout(watchdogTimer);
+        hasReceivedFirstByte = true;
         if (res.statusCode !== 200) {
           let errBody = '';
           res.on('data', (c) => { errBody += c; });
-          res.on('end', () => reject(new Error(`HTTP ${res.statusCode}: ${errBody}`)));
+          res.on('end', () => safeReject(new Error(`HTTP ${res.statusCode}: ${errBody}`)));
           return;
         }
 
@@ -1260,6 +1723,11 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
 
         res.setEncoding('utf8');
         res.on('data', (chunk) => {
+          hasReceivedFirstByte = true;
+          clearTimeout(watchdogTimer);
+          // Refresh socket timeout on each incoming chunk so active generation never times out
+          try { req.setTimeout(timeout); } catch (_) {}
+
           buffer += chunk;
           let idx;
           while ((idx = buffer.indexOf('\n')) !== -1) {
@@ -1282,20 +1750,23 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
                 }
               }
             } catch (_) {
-              // Partial JSON across chunk boundaries is rare with line framing;
-              // skip anything that doesn't parse cleanly.
             }
           }
         });
 
-        res.on('end', () => resolve(fullText.trim()));
-        res.on('error', (error) => reject(new Error(`Streaming response error: ${error.message}`)));
+        res.on('end', () => {
+          if (abortHandler && abortSignal) {
+            abortSignal.removeEventListener('abort', abortHandler);
+          }
+          safeResolve(fullText.trim());
+        });
+        res.on('error', (error) => safeReject(new Error(`Streaming response error: ${error.message}`)));
       });
 
-      req.on('error', (error) => reject(new Error(`Streaming request failed: ${error.message}`)));
+      req.on('error', (error) => safeReject(new Error(`Streaming request failed: ${error.message}`)));
       req.on('timeout', () => {
-        req.destroy();
-        reject(new Error('Streaming request timeout'));
+        try { req.destroy(); } catch (_) {}
+        safeReject(new Error('Streaming request timeout'));
       });
 
       req.write(postData);
@@ -1325,15 +1796,15 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
   }
 
   getUserAgent() {
-    try {
-      // Try to get user agent from Electron if available
-      if (typeof navigator !== 'undefined' && navigator.userAgent) {
-        return navigator.userAgent;
-      }
-      return `Node.js/${process.version} (${process.platform}; ${process.arch})`;
-    } catch {
-      return 'Unknown';
+    // Always return a realistic browser UA to avoid network fingerprinting
+    // by proctoring tools that inspect outgoing HTTP headers.
+    if (process.platform === 'darwin') {
+      return 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.156 Safari/537.36';
     }
+    if (process.platform === 'win32') {
+      return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.156 Safari/537.36';
+    }
+    return 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.156 Safari/537.36';
   }
 
   analyzeError(error) {
@@ -1443,6 +1914,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
 
     const fallbackResponses = {
       'dsa': 'This appears to be a data structures and algorithms problem. Consider breaking it down into smaller components and identifying the appropriate algorithm or data structure to use.',
+      'interview': 'Focus on providing a crisp 1-line definition, key terminology, 3 core technical facts, and a concrete production example.',
       'system-design': 'For this system design question, consider scalability, reliability, and the trade-offs between different architectural approaches.',
       'programming': 'This looks like a programming challenge. Focus on understanding the requirements, edge cases, and optimal time/space complexity.',
       'default': 'I can help analyze this content. Please ensure your Gemini API key is properly configured for detailed analysis.'
@@ -1464,44 +1936,33 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
   generateIntelligentFallbackResponse(text, activeSkill) {
     logger.info('Generating intelligent fallback response for transcription', { activeSkill });
 
-    // Simple heuristic to determine if message seems skill-related
-    const skillKeywords = {
-      'dsa': ['algorithm', 'data structure', 'array', 'tree', 'graph', 'sort', 'search', 'complexity', 'big o'],
-      'programming': ['code', 'function', 'variable', 'class', 'method', 'bug', 'debug', 'syntax'],
-      'system-design': ['scalability', 'database', 'architecture', 'microservice', 'load balancer', 'cache'],
-      'behavioral': ['interview', 'experience', 'situation', 'leadership', 'conflict', 'team'],
-      'sales': ['customer', 'deal', 'negotiation', 'price', 'revenue', 'prospect'],
-      'presentation': ['slide', 'audience', 'public speaking', 'presentation', 'nervous'],
-      'data-science': ['data', 'model', 'machine learning', 'statistics', 'analytics', 'python', 'pandas'],
-      'devops': ['deployment', 'ci/cd', 'docker', 'kubernetes', 'infrastructure', 'monitoring'],
-      'negotiation': ['negotiate', 'compromise', 'agreement', 'terms', 'conflict resolution']
-    };
-
-    const textLower = text.toLowerCase();
-    const relevantKeywords = skillKeywords[activeSkill] || [];
-    const hasRelevantKeywords = relevantKeywords.some(keyword => textLower.includes(keyword));
-    
-    // Check for question indicators
-    const questionIndicators = ['how', 'what', 'why', 'when', 'where', 'can you', 'could you', 'should i', '?'];
-    const seemsLikeQuestion = questionIndicators.some(indicator => textLower.includes(indicator));
-
-    let response;
-    if (hasRelevantKeywords || seemsLikeQuestion) {
-      response = `I'm having trouble processing that right now, but it sounds like a ${activeSkill} question. Could you rephrase or ask more specifically about what you need help with?`;
-    } else {
-      response = `Yeah, I'm listening. Ask your question relevant to ${activeSkill}.`;
+    try {
+      const localKnowledgeService = require('./local-knowledge.service');
+      const instant = localKnowledgeService.synthesizeInstantResponse(text, activeSkill);
+      return {
+        response: instant.fullResponse,
+        metadata: {
+          skill: activeSkill,
+          processingTime: 5,
+          requestId: this.requestCount,
+          usedFallback: true,
+          isInstant: true,
+          isTranscriptionResponse: true
+        }
+      };
+    } catch (e) {
+      logger.error('Failed to generate local knowledge response, using basic fallback', { error: e.message });
+      return {
+        response: `❓ Question: ${text.substring(0, 30)}\n🗣️ Start with: "I approach this by analyzing the architecture requirements first and evaluating performance trade-offs."\n⚡ Talking Points:\n• Focus on [modular design] and data integrity.\n• Benchmark [latency and throughput] trade-offs.\n🎯 Key-Value Insights:\n• Advantages: High stability and clean code.\n• Real-Life Example: Applied in ClinicOS and Vedprada delivering 99.9% uptime.`,
+        metadata: {
+          skill: activeSkill,
+          processingTime: 1,
+          requestId: this.requestCount,
+          usedFallback: true,
+          isTranscriptionResponse: true
+        }
+      };
     }
-    
-    return {
-      response,
-      metadata: {
-        skill: activeSkill,
-        processingTime: 0,
-        requestId: this.requestCount,
-        usedFallback: true,
-        isTranscriptionResponse: true
-      }
-    };
   }
 
   async testConnection() {
@@ -1648,53 +2109,54 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
 
   async executeAlternativeRequest(geminiRequest) {
     const apiKeys = config.getApiKeys('GEMINI');
-    const primaryModel = config.get('llm.gemini.model');
+    const primaryModel = config.get('llm.gemini.model') || this.model || 'gemini-3-flash-preview';
     const fallbackModels = config.get('llm.gemini.fallbackModels') || [];
-    const modelsToTry = [primaryModel, ...fallbackModels];
+    const modelsToTry = [primaryModel, ...fallbackModels.filter(m => m !== primaryModel)];
 
     logger.info('Using alternative HTTPS request method with failover', {
       modelsToTry,
       configuredKeysCount: apiKeys.length
     });
 
+    const orderedKeyIndices = this.getOrderedKeyIndices(apiKeys.length);
     let lastError = null;
 
-    for (let keyIndex = 0; keyIndex < apiKeys.length; keyIndex++) {
+    for (const keyIndex of orderedKeyIndices) {
       const apiKey = apiKeys[keyIndex];
-      const isBackupKey = keyIndex > 0;
+      const isBackupKey = keyIndex !== orderedKeyIndices[0];
 
       if (isBackupKey) {
         logger.info(`Failing over to secondary backup Gemini API key (Key #${keyIndex + 1})...`);
       }
 
       for (const modelName of modelsToTry) {
+        const t0 = Date.now();
         try {
           const result = await this._executeAlternativeRequestForModel(geminiRequest, modelName, apiKey);
+          const latency = Date.now() - t0;
+          this.markKeySuccess(keyIndex, modelName, latency, null);
           if (isBackupKey) {
             logger.info('Successfully completed AI request using secondary backup API key!');
           }
           return result;
         } catch (error) {
           lastError = error;
+          this.markKeyError(keyIndex, modelName, error.message, apiKeys.length);
           logger.warn(`Alternative HTTPS request failed (Key #${keyIndex + 1}, model ${modelName})`, {
             error: error.message,
             model: modelName
           });
 
-          const isQuotaOrAuth = error.message.includes('429') ||
-            error.message.includes('RESOURCE_EXHAUSTED') ||
-            error.message.includes('quota') ||
-            error.message.includes('rate limit') ||
-            error.message.includes('403') ||
+          const isAuthError = error.message.includes('403') ||
+            error.message.includes('401') ||
             error.message.includes('API_KEY_INVALID');
 
-          // If current key has quota/rate-limit/auth issue and we have another key available, switch to next key immediately!
-          if (isQuotaOrAuth && keyIndex + 1 < apiKeys.length) {
-            logger.warn(`Key #${keyIndex + 1} hit quota or auth limits; switching immediately to next available backup API key.`);
+          // If current key has auth error, switch immediately to next available key!
+          if (isAuthError && apiKeys.length > 1) {
+            logger.warn(`Key #${keyIndex + 1} has auth error; switching immediately to next available backup API key.`);
             break;
           }
 
-          // On any model error, continue to try the next fallback model
           continue;
         }
       }
@@ -1708,7 +2170,12 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
 
-    const postData = JSON.stringify(geminiRequest);
+    // Strip thinkingConfig from generationConfig — the v1beta REST endpoint does NOT support it
+    // and returns an empty response (no text, no tool calls) when it is present.
+    const safeRequest = geminiRequest.generationConfig && geminiRequest.generationConfig.thinkingConfig
+      ? { ...geminiRequest, generationConfig: (({ thinkingConfig, ...rest }) => rest)(geminiRequest.generationConfig) }
+      : geminiRequest;
+    const postData = JSON.stringify(safeRequest);
 
     const agent = new https.Agent({ keepAlive: true, maxSockets: 1 });
 
