@@ -491,7 +491,7 @@
 /* ── State ── */
 var history = [], histIdx = -1, initialized = false;
 var hearingTimer = null, isStreaming = false, streamBuffer = '';
-var lastHandledMessageId = null, lastHandledText = null;
+var currentStreamingMessageId = null, lastHandledMessageId = null, lastHandledText = null;
 
 /* ── DOM ── */
 var micDot       = document.getElementById('mic-dot');
@@ -555,7 +555,8 @@ function renderIdleHUD() {
 
 function showThinking(hint) {
     thinkingMsg.classList.add('show');
-    thinkingLbl.textContent = hint ? ('Analyzing: "' + hint.substring(0, 36) + (hint.length > 36 ? '\u2026' : '"')) : 'Analyzing\u2026';
+    thinkingLbl.textContent = hint ? ('Analyzing: "' + hint.substring(0, 48) + (hint.length > 48 ? '\u2026' : '"')) : 'Analyzing\u2026';
+    if (answerText) answerText.style.opacity = '0.55';
 }
 
 function autoResizeWindow() {
@@ -570,6 +571,7 @@ function autoResizeWindow() {
 
 function showAnswer(html) {
     thinkingMsg.classList.remove('show');
+    if (answerText) answerText.style.opacity = '1';
     answerText.innerHTML = html;
     answerText.style.display = 'block';
     var w = document.getElementById('scroll-wrap');
@@ -601,17 +603,19 @@ function navigate(delta) {
 function resetSession() {
     if (streamRenderTimer) { clearTimeout(streamRenderTimer); streamRenderTimer = null; }
     history = []; histIdx = -1; isStreaming = false; streamBuffer = '';
-    lastHandledMessageId = null; lastHandledText = null;
+    currentStreamingMessageId = null; lastHandledMessageId = null; lastHandledText = null;
     updateNav(); showIdle();
 }
 
 /* ── Progressive HUD Streaming (Anti-Eye-Tracking) ── */
 var streamRenderTimer = null;
 
-function appendStreamChunk(chunk) {
+function appendStreamChunk(chunk, msgId) {
+    if (msgId && currentStreamingMessageId && msgId !== currentStreamingMessageId) return;
     if (!chunk || !isStreaming) return;
     streamBuffer += chunk;
     thinkingMsg.classList.remove('show');
+    if (answerText) answerText.style.opacity = '1';
 
     // Progressive HUD update throttled at 40ms — updates directly into 2-column cards, NEVER raw text
     if (!streamRenderTimer) {
@@ -636,6 +640,8 @@ function finalizeStream(override) {
     streamBuffer = '';
     isStreaming = false;
     micDot.className = 'on';
+    thinkingMsg.classList.remove('show');
+    if (answerText) answerText.style.opacity = '1';
     if (finalRaw && finalRaw.trim()) {
         pushHistory(finalRaw);
     }
@@ -899,11 +905,15 @@ function init() {
     if (api.onTranscriptionLlmResponseStart) api.onTranscriptionLlmResponseStart(function(){
         var args = Array.prototype.slice.call(arguments);
         var data = args.length >= 2 ? args[1] : args[0];
-        isStreaming = true; streamBuffer = '';
-        micDot.className = 'on'; hideHearing();
+        if (streamRenderTimer) { clearTimeout(streamRenderTimer); streamRenderTimer = null; }
+        streamBuffer = '';
+        var msgId = (data && data.messageId) || null;
+        currentStreamingMessageId = msgId;
+        isStreaming = true;
+        micDot.className = 'on'; 
+        hideHearing();
         if (data && data.instantResponse) {
             isStreaming = false;
-            var msgId = data.messageId || null;
             lastHandledMessageId = msgId;
             lastHandledText = data.instantResponse;
             pushHistory(data.instantResponse);
@@ -914,12 +924,14 @@ function init() {
 
     /* streaming chunk — render immediately into HUD */
     if (api.onTranscriptionLlmResponseChunk) api.onTranscriptionLlmResponseChunk(function(){
-        if (!isStreaming) return;
         var args = Array.prototype.slice.call(arguments);
         var payload = args.length >= 2 ? args[1] : args[0];
         if (!payload) return;
+        var msgId = payload.messageId;
+        if (msgId && currentStreamingMessageId && msgId !== currentStreamingMessageId) return; // Drop preempted chunk
+        if (!isStreaming) return;
         var chunk = payload.delta || payload.chunk || payload.text || (typeof payload === 'string' ? payload : '');
-        if (chunk) appendStreamChunk(chunk);
+        if (chunk) appendStreamChunk(chunk, msgId);
     });
 
     /* final response — deduplicated across IPC channels */
@@ -929,6 +941,9 @@ function init() {
         hideHearing();
         var text = (data && (data.response || data.content)) || (typeof data === 'string' ? data : '');
         var msgId = (data && (data.messageId || (data.metadata && data.metadata.messageId))) || null;
+
+        // If message belongs to an older preempted request, discard it
+        if (msgId && currentStreamingMessageId && msgId !== currentStreamingMessageId) return;
 
         if (!text || !text.trim()) {
             if (isStreaming && streamBuffer) finalizeStream(streamBuffer);

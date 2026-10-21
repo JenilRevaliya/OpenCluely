@@ -2004,24 +2004,15 @@ class ApplicationController {
     const t = text.trim().toLowerCase().replace(/[\.,!?;:\-]/g, ' ').replace(/\s+/g, ' ').trim();
     if (!t) return false;
     
-    const preambles = [
+    const preambles = new Set([
       'okay', 'ok', 'great', 'awesome', 'good', 'perfect', 'got it', 'makes sense',
       'that makes sense', 'thank you', 'thanks', 'cool', 'nice', 'moving forward',
       'moving on', 'next question', 'alright', 'right', 'all right', 'sure',
       'fair enough', 'understood', 'sounds good', 'very good', 'thank you for that',
       'thanks for explaining', 'thanks for explaining that', 'great answer', 'that was great',
-      'yes', 'yeah', 'yep', 'exactly', 'correct', 'absolutely'
-    ];
-    if (preambles.includes(t)) return true;
-
-    const words = t.split(' ');
-    if (words.length <= 4) {
-      const hasQuestionWord = /\b(what|how|why|when|where|who|explain|tell|describe|can|could|in your|would|if|difference|pros|cons)\b/i.test(t);
-      if (!hasQuestionWord && !/\?$/.test(text.trim())) {
-        return true;
-      }
-    }
-    return false;
+      'yes', 'yeah', 'yep', 'exactly', 'correct', 'absolutely', 'uh', 'um', 'hm', 'hmm'
+    ]);
+    return preambles.has(t);
   }
 
   /**
@@ -2085,8 +2076,8 @@ class ApplicationController {
       return true;
     }
 
-    // Rule 5: If there's no question mark and the speech trails off on dangling connector:
-    if (!hasPunctuation) {
+    // Rule 5: If there's no question mark and the speech trails off on dangling connector on short fragment (<= 4 words)
+    if (!hasPunctuation && words.length <= 4) {
       const trailingDangling = /\b(about|were|when|where|why|how|what|if|with|such as|into|onto|than|to|for|in|at|by|from|as|me|us|we)\s*$/i;
       if (trailingDangling.test(clean)) {
         return true;
@@ -2189,24 +2180,13 @@ class ApplicationController {
     const isOtherPunctuation = /[!\.]$/.test(fragment.trim());
     const isPreambleOnly = isInterviewQuestion && this._isRecruiterPreambleOnly(this._utteranceBuffer);
 
-    // Fast-path: If the buffer already matches local knowledge with high confidence,
-    // dispatch IMMEDIATELY with 0ms wait!
-    if (isInterviewQuestion && this._utteranceBuffer.length >= 10) {
-      const instantCheck = localKnowledgeService.synthesizeInstantResponse(this._utteranceBuffer, this.activeSkill);
-      if (instantCheck.isHighConfidenceMatch && instantCheck.fullResponse) {
-        logger.info("Instant local knowledge match detected during speech; dispatching with 0ms delay", {
-          topic: instantCheck.questionTitle
-        });
-        this.dispatchCoalescedUtterance();
-        return;
-      }
-    }
-
     // Conversational debounce:
-    // - If it's pure preamble/acknowledgment ("Great, thanks.", "That makes sense."), wait 750ms for recruiter's question
-    // - 75ms for ?, 150ms for ., 200ms otherwise for immediate real-time analysis
+    // - If question ends with '?', debounce promptly at 200ms
+    // - If ending in '.' or '!', wait 250ms
+    // - If mid-sentence or without punctuation, wait 350ms so speech coalesces into one complete thought
+    // - If pure preamble acknowledgment, wait 650ms for the actual question body
     const coalesceDelay = isInterviewQuestion 
-      ? (isPreambleOnly ? 750 : (isQuestionMark ? 75 : (isOtherPunctuation ? 150 : 200))) 
+      ? (isPreambleOnly ? 650 : (isQuestionMark ? 200 : (isOtherPunctuation ? 250 : 350))) 
       : this._utteranceCoalesceMs;
 
     this._utteranceTimer = setTimeout(() => {
@@ -2217,17 +2197,18 @@ class ApplicationController {
 
   /**
    * Send the coalesced utterance to the LLM.
-   * Latest-Wins Preemption Model: If a previous dispatch is still running,
-   * immediately abort the obsolete request and start processing the latest
-   * question without any lockup or lag.
+   * Linear Motion & Latest-Wins Preemption Pipeline:
+   * 1. If an existing LLM generation or analysis is currently in flight, immediately abort it.
+   * 2. Immediately notify the Voice UI to transition from "Hearing..." to "Analyzing: [new question]".
+   * 3. Evaluate fastest path first (instant greeting, curated KB, or Gemini 3.5 Flash Lite stream).
    */
   async dispatchCoalescedUtterance() {
-    const combined = this._utteranceBuffer.trim();
+    const combined = (this._utteranceBuffer || "").trim();
     if (!combined) {
       return;
     }
 
-    // Suppress dispatch if the buffer is solely an acknowledgment filler
+    // Suppress dispatch if the buffer is solely an isolated acknowledgment filler
     if (this._isRecruiterPreambleOnly(combined)) {
       logger.debug("Suppressing dispatch for pure recruiter acknowledgment", { text: combined });
       this._utteranceBuffer = "";
@@ -2240,9 +2221,11 @@ class ApplicationController {
     }
 
     // Extract core question from recruiter compound statement
-    const targetQuestion = this._extractCoreQuestion(combined);
+    const targetQuestion = this._extractCoreQuestion(combined) || combined;
+    this._utteranceBuffer = "";
 
-    // If an existing LLM generation is currently running, PREEMPT IT!
+    // 1. LATEST-WINS PREEMPTION:
+    // If a previous LLM generation or analysis is currently running, ABORT IT IMMEDIATELY!
     if (this._activeLlmAbortController) {
       logger.info("Preempting in-flight LLM question with new incoming question", {
         newQuestionPreview: targetQuestion.substring(0, 80)
@@ -2255,21 +2238,38 @@ class ApplicationController {
       this._activeLlmAbortController = null;
     }
 
-    this._utteranceBuffer = "";
-    this._utteranceDispatchInFlight = true;
-
     // Create a new AbortController and track request ID for latest-wins validation
     const abortController = new AbortController();
     this._activeLlmAbortController = abortController;
     const currentRequestId = ++this._currentLlmRequestId;
+    this._responseSeq = (this._responseSeq || 0) + 1;
+    const messageId = `tr-${Date.now()}-${this._responseSeq}`;
 
-    // Record the full, coalesced question once in session history
+    // 2. IMMEDIATE LINEAR UI NOTIFICATION:
+    // Instantly transition the UI from "Hearing..." to "Analyzing: [new question]"
+    this.sendToVoiceResponseWindows("transcription-llm-response-start", {
+      messageId,
+      skill: this.activeSkill,
+      questionPreview: targetQuestion.substring(0, 80),
+      isAnalyzing: true
+    });
+    if (this.shouldShowVoiceOverlay()) {
+      windowManager.showLLMLoading(targetQuestion.substring(0, 80));
+    }
+
+    // 3. Record the full, coalesced question once in session history
     sessionManager.addUserInput(targetQuestion, 'speech');
 
     try {
       const finalQuestion = targetQuestion || combined;
       const sessionHistory = sessionManager.getOptimizedHistory();
-      await this.processTranscriptionWithLLM(finalQuestion, sessionHistory, abortController.signal, currentRequestId);
+      await this.processTranscriptionWithLLM(
+        finalQuestion,
+        sessionHistory,
+        abortController.signal,
+        currentRequestId,
+        messageId
+      );
     } catch (error) {
       if (abortController.signal.aborted || error.message === 'ABORTED' || error.name === 'AbortError') {
         logger.info("Transcription LLM was preempted by newer question, ignoring aborted response", {
@@ -2283,21 +2283,20 @@ class ApplicationController {
       }
     } finally {
       if (this._currentLlmRequestId === currentRequestId) {
-        this._utteranceDispatchInFlight = false;
         this._activeLlmAbortController = null;
       }
       // Check if any fresh fragments arrived while processing
-      const leftover = this._utteranceBuffer.trim();
-      if (leftover && leftover.length >= 15 && /[a-zA-Z]{3,}/.test(leftover)) {
+      const leftover = (this._utteranceBuffer || "").trim();
+      if (leftover && leftover.length >= 10 && /[a-zA-Z]{2,}/.test(leftover)) {
         this._utteranceTimer = setTimeout(() => {
           this._utteranceTimer = null;
           this.dispatchCoalescedUtterance();
-        }, 450);
+        }, 300);
       }
     }
   }
 
-  async processTranscriptionWithLLM(text, sessionHistory, abortSignal = null, requestId = 0) {
+  async processTranscriptionWithLLM(text, sessionHistory, abortSignal = null, requestId = 0, messageId = null) {
     if (abortSignal && abortSignal.aborted) {
       return;
     }
@@ -2305,9 +2304,11 @@ class ApplicationController {
       sessionHistory = sessionManager.getOptimizedHistory();
     }
 
-    // Hoisted so the catch block can tie a fallback answer to the same UI
-    // bubble the streaming start event created.
-    let messageId = null;
+    if (!messageId) {
+      this._responseSeq = (this._responseSeq || 0) + 1;
+      messageId = `tr-${Date.now()}-${this._responseSeq}`;
+    }
+
     try {
       // Validate input text
       if (!text || typeof text !== 'string' || text.trim().length === 0) {
@@ -2330,6 +2331,7 @@ class ApplicationController {
       logger.info("Processing transcription with intelligent LLM response", {
         skill: this.activeSkill,
         requestId,
+        messageId,
         textLength: cleanText.length,
         textPreview: cleanText.substring(0, 100) + "..."
       });
@@ -2338,14 +2340,6 @@ class ApplicationController {
       if (this._isPureGreeting(cleanText)) {
         logger.info("Handling pure conversational greeting with ultra-fast instant response", { text: cleanText });
         const greetingResponse = `❓ Question: Warm interview greeting\n🗣️ Start with: "I'm doing well, thank you! It's great to connect with you today—I'm really excited for our conversation."\n⚡ Talking Points:\n• Express [genuine enthusiasm] about the role, team, and technology stack.\n• Confirm [clear audio] and that you are ready to dive into technical discussions.\n🎯 Key-Value Insights:\n• Candidate Mindset: Warm, articulate, humble, and engineering-ready.\n• Our Approach: Keep initial greeting brief and transition smoothly to technical questions.`;
-        
-        this._responseSeq = (this._responseSeq || 0) + 1;
-        messageId = `tr-${Date.now()}-${this._responseSeq}`;
-        this.sendToVoiceResponseWindows("transcription-llm-response-start", {
-          messageId,
-          skill: this.activeSkill,
-          questionPreview: cleanText
-        });
         
         const fastResult = {
           response: greetingResponse,
@@ -2358,22 +2352,8 @@ class ApplicationController {
           }
         };
 
-        sessionManager.addModelResponse(greetingResponse, {
-          skill: this.activeSkill,
-          processingTime: 15,
-          usedFallback: false,
-          isTranscriptionResponse: true
-        });
-
+        sessionManager.addModelResponse(greetingResponse, fastResult.metadata);
         this.sendTranscriptionLLMResponseToVoiceTargets(fastResult);
-        if (this.shouldShowVoiceOverlay()) {
-          windowManager.showLLMResponse(greetingResponse, {
-            skill: this.activeSkill,
-            processingTime: 15,
-            usedFallback: false,
-            isTranscriptionResponse: true
-          });
-        }
         return;
       }
 
@@ -2382,41 +2362,18 @@ class ApplicationController {
       const skillsRequiringProgrammingLanguage = ['dsa'];
       const needsProgrammingLanguage = !isInterview && skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
-      // Stream the answer progressively to the configured speech target.
-      // A unique messageId ties the start/chunk/final events to one bubble so
-      // the UI never duplicates or interleaves concurrent responses.
-      this._responseSeq = (this._responseSeq || 0) + 1;
-      messageId = `tr-${Date.now()}-${this._responseSeq}`;
-
       // 1. Instant local knowledge check
       const instant = localKnowledgeService.synthesizeInstantResponse(cleanText, this.activeSkill);
 
       // Path A: High-Confidence Curated Knowledge Match (<0.4ms)
-      // Stick to this ONE answer! Never run a remote LLM call that will mutate or swap out text while reading!
       if (instant.isHighConfidenceMatch && instant.fullResponse) {
         logger.info("High-confidence answer locked in; skipping redundant LLM call to guarantee a single stable response", {
           topic: instant.questionTitle,
-          requestId
+          requestId,
+          messageId
         });
 
-        this.sendToVoiceResponseWindows("transcription-llm-response-start", {
-          messageId,
-          skill: this.activeSkill,
-          questionPreview: cleanText.substring(0, 100),
-          questionTitle: instant.questionTitle,
-          instantResponse: instant.fullResponse
-        });
-
-        sessionManager.addModelResponse(instant.fullResponse, {
-          skill: this.activeSkill,
-          processingTime: 1,
-          usedFallback: false,
-          isInstantResponse: true,
-          isLocked: true,
-          isTranscriptionResponse: true
-        });
-
-        this.sendTranscriptionLLMResponseToVoiceTargets({
+        const instantResult = {
           response: instant.fullResponse,
           metadata: {
             skill: this.activeSkill,
@@ -2427,12 +2384,14 @@ class ApplicationController {
             isTranscriptionResponse: true,
             messageId
           }
-        });
+        };
+
+        sessionManager.addModelResponse(instant.fullResponse, instantResult.metadata);
+        this.sendTranscriptionLLMResponseToVoiceTargets(instantResult);
         return;
       }
 
       // Path B: Incomplete Speech, Mumbles, or Trailing Sentence Fragments
-      // Do NOT force a synthetic answer or call the LLM to hallucinate; throw a clarification signal instead!
       if (this._isIncompleteOrMumble(cleanText)) {
         logger.info("Incomplete or trailing speech detected; showing clarification signal card instead of forcing answer", {
           requestId,
@@ -2443,20 +2402,6 @@ class ApplicationController {
       }
 
       // Path C: Novel / Bespoke Question (Requires Remote LLM)
-      // Keep window in a calm "Analyzing..." state. Do NOT render a fake question-echoing card!
-      // Do NOT stream partial word chunks that cause layout jumping. Render the final answer ONCE upon completion.
-      this.sendToVoiceResponseWindows("transcription-llm-response-start", {
-        messageId,
-        skill: this.activeSkill,
-        questionPreview: cleanText.substring(0, 100),
-        questionTitle: instant.questionTitle || "Analyzing question...",
-        isAnalyzing: true
-      });
-
-      if (this.shouldShowVoiceOverlay()) {
-        windowManager.showLLMLoading(cleanText.substring(0, 100));
-      }
-
       if (abortSignal && abortSignal.aborted) {
         return;
       }
@@ -2467,6 +2412,7 @@ class ApplicationController {
         (sessionHistory && sessionHistory.recent) || [],
         needsProgrammingLanguage ? this.codingLanguage : null,
         (delta) => {
+          if (abortSignal && abortSignal.aborted) return;
           this.sendToVoiceResponseWindows("transcription-llm-response-chunk", {
             messageId,
             delta
@@ -2495,6 +2441,7 @@ class ApplicationController {
 
       logger.info("Transcription LLM response completed", {
         requestId,
+        messageId,
         responseLength: llmResult.response.length,
         skill: this.activeSkill,
         programmingLanguage: needsProgrammingLanguage ? this.codingLanguage : 'not applicable',
@@ -2518,8 +2465,6 @@ class ApplicationController {
       // Try to provide a fallback response
       try {
         const fallbackResult = llmService.generateIntelligentFallbackResponse(text, this.activeSkill);
-        // Carry the streaming messageId so the target replaces the live
-        // bubble instead of leaving it stuck and appending a duplicate.
         if (messageId) {
           fallbackResult.metadata = { ...fallbackResult.metadata, messageId };
         }
@@ -2532,25 +2477,9 @@ class ApplicationController {
           fallbackReason: error.message
         });
 
-        this.sendTranscriptionLLMResponseToVoiceTargets(fallbackResult);
-        logger.info("Used fallback response for transcription", {
-          skill: this.activeSkill,
-          fallbackResponse: fallbackResult.response
-        });
-        
       } catch (fallbackError) {
         logger.error("Fallback response also failed", {
           fallbackError: fallbackError.message
-        });
-
-        sessionManager.addConversationEvent({
-          role: 'system',
-          content: `Transcription LLM processing failed: ${error.message}`,
-          action: 'transcription_llm_error',
-          metadata: {
-            error: error.message,
-            skill: this.activeSkill
-          }
         });
       }
     }

@@ -53,8 +53,9 @@ class LocalKnowledgeService {
       }
     }
 
-    // 2. High-confidence match (score >= 2): Return pre-compiled rubric-grade answer
-    if (bestMatch && highestScore >= 2) {
+    // 2. High-confidence match (score >= 4): Return pre-compiled rubric-grade answer
+    // Must match a regex (+4) or multiple strong patterns (>= 4) to lock in an instant answer
+    if (bestMatch && highestScore >= 4) {
       logger.info('Local Knowledge matched domain topic with high confidence', {
         topic: bestMatch.title,
         score: highestScore,
@@ -418,7 +419,11 @@ class LocalKnowledgeService {
 
       // ── 12. BEHAVIORAL: TELL ME ABOUT YOURSELF ──
       {
-        patterns: ['tell me about yourself', 'walk me through your resume', 'who are you', 'introduce yourself', 'your background', 'about yourself'],
+        patterns: [
+          /^(tell me about yourself|introduce yourself|walk me through your resume|who are you)\b/i,
+          /\b(tell me about your background|give me an overview of your background|share your background)\b/i,
+          'tell me about yourself', 'walk me through your resume', 'introduce yourself'
+        ],
         title: 'Candidate Introduction (Jenil Soni)',
         startWith: "I'm a software engineer passionate about building real-world solutions at the intersection of backend systems, computer vision, and scalable web architectures.",
         talkingPoints: [
