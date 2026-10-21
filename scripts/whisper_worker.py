@@ -12,7 +12,8 @@ import whisper
 # Resource Governance: Cap CPU thread usage to avoid starving video conference,
 # camera encoding, or interview browser audio/video pipelines.
 try:
-    torch.set_num_threads(2)
+    num_threads = min(4, max(2, (os.cpu_count() or 4) // 2))
+    torch.set_num_threads(num_threads)
     if hasattr(torch, 'set_num_interop_threads'):
         torch.set_num_interop_threads(1)
 except Exception:

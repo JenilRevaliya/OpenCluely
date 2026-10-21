@@ -2203,10 +2203,10 @@ class ApplicationController {
     }
 
     // Conversational debounce:
-    // - If it's pure preamble/acknowledgment ("Great, thanks.", "That makes sense."), wait 900ms for recruiter's question
-    // - 140ms for ?, 240ms for ., 320ms otherwise (was 400ms / 650ms / 750ms!)
+    // - If it's pure preamble/acknowledgment ("Great, thanks.", "That makes sense."), wait 750ms for recruiter's question
+    // - 75ms for ?, 150ms for ., 200ms otherwise for immediate real-time analysis
     const coalesceDelay = isInterviewQuestion 
-      ? (isPreambleOnly ? 900 : (isQuestionMark ? 140 : (isOtherPunctuation ? 240 : 320))) 
+      ? (isPreambleOnly ? 750 : (isQuestionMark ? 75 : (isOtherPunctuation ? 150 : 200))) 
       : this._utteranceCoalesceMs;
 
     this._utteranceTimer = setTimeout(() => {

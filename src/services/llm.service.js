@@ -90,7 +90,7 @@ class LLMService extends EventEmitter {
     if (!apiKeys || apiKeys.length === 0) {
       return { ok: false, reason: 'No Gemini API keys configured' };
     }
-    const model = config.get('llm.gemini.model') || this.model || 'gemini-3-flash-preview';
+    const model = config.get('llm.gemini.model') || this.model || 'gemini-3.5-flash-lite';
     const primaryKey = apiKeys[this.preferredKeyIndex] || apiKeys[0];
 
     this.emitDebugStatus({
@@ -265,7 +265,7 @@ class LLMService extends EventEmitter {
   async runLiveDiagnosticsProbe() {
     const https = require('https');
     const apiKeys = config.getApiKeys('GEMINI');
-    const primaryModel = config.get('llm.gemini.model') || 'gemini-3-flash-preview';
+    const primaryModel = config.get('llm.gemini.model') || 'gemini-3.5-flash-lite';
     const fallbackModels = config.get('llm.gemini.fallbackModels') || [];
     const modelsToTest = [primaryModel, ...fallbackModels.filter(m => m !== primaryModel)];
 
@@ -1532,7 +1532,7 @@ Follow with a crisp 2-3 bullet point justification.`;
     }
 
     const maxRetries = config.get('llm.gemini.maxRetries') || 1;
-    const primaryModel = config.get('llm.gemini.model') || this.model || 'gemini-3-flash-preview';
+    const primaryModel = config.get('llm.gemini.model') || this.model || 'gemini-3.5-flash-lite';
     const fallbackModels = config.get('llm.gemini.fallbackModels') || [];
     const modelsToTry = [primaryModel, ...fallbackModels.filter(m => m !== primaryModel)];
 
@@ -2109,7 +2109,7 @@ Follow with a crisp 2-3 bullet point justification.`;
 
   async executeAlternativeRequest(geminiRequest) {
     const apiKeys = config.getApiKeys('GEMINI');
-    const primaryModel = config.get('llm.gemini.model') || this.model || 'gemini-3-flash-preview';
+    const primaryModel = config.get('llm.gemini.model') || this.model || 'gemini-3.5-flash-lite';
     const fallbackModels = config.get('llm.gemini.fallbackModels') || [];
     const modelsToTry = [primaryModel, ...fallbackModels.filter(m => m !== primaryModel)];
 
