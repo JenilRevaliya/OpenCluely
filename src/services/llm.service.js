@@ -664,8 +664,13 @@ class LLMService extends EventEmitter {
       const langNote = programmingLanguage ? ` Use only ${programmingLanguage.toUpperCase()} if code is required.` : '';
       return `MANDATORY MCQ MODE ACTIVE: Analyze this screen/image for ALL Multiple Choice Questions (MCQs) visible. There may be one or multiple questions. For EACH question found: identify all options (A, B, C, D, etc.), select the single BEST correct answer, and format your response as "**Q[N] Correct Option: [Letter] - [Option Text]**" followed by concise reasoning. If only one MCQ is visible, omit the Q[N] prefix. Answer every question you can see.${langNote}`;
     }
-    const langNote = programmingLanguage ? ` Use only ${programmingLanguage.toUpperCase()} for any code.` : '';
-    return `Analyze this image for a ${activeSkill.toUpperCase()} question. Extract the problem concisely and provide the best possible solution with explanation and final code.${langNote}`;
+    const lang = programmingLanguage ? programmingLanguage.toUpperCase() : 'PYTHON';
+    return `Analyze this screen for a ${activeSkill.toUpperCase()} problem.
+CRITICAL EXECUTION RULES:
+1. Detect the platform (HackerRank, LeetCode, Codeforces, etc.), exact problem title, constraints, and visible editor template.
+2. If on HackerRank or an Online Assessment with driver code: provide the COMPLETE, self-contained drop-in replacement file (with standard imports, exact function signature, and the robust if __name__ == '__main__': driver reading stdin and writing to OUTPUT_PATH / stdout) so that replacing the whole editor executes 100% of test cases correctly.
+3. If on LeetCode: provide class Solution with the exact method signature.
+4. Output clean, optimal, comment-free code strictly in ${lang}.`;
   }
 
   async processTextWithSkill(text, activeSkill, sessionMemory = [], programmingLanguage = null) {
