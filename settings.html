@@ -601,6 +601,12 @@
         </div>
     </div>
 
+    <script src="./src/ui/corner-hover-drag.js"></script>
     <script src="./src/ui/settings-window.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            if (window.initCornerHoverDrag) window.initCornerHoverDrag('settings');
+        });
+    </script>
 </body>
 </html>

@@ -32,7 +32,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   switchToSkills: () => ipcRenderer.invoke('switch-to-skills'),
   resizeWindow: (width, height) => ipcRenderer.invoke('resize-window', { width, height }),
   moveWindow: (deltaX, deltaY) => ipcRenderer.invoke('move-window', { deltaX, deltaY }),
-  startHoverDrag: () => ipcRenderer.invoke('start-hover-drag'),
+  startHoverDrag: (target) => ipcRenderer.invoke('start-hover-drag', target),
   stopHoverDrag: () => ipcRenderer.invoke('stop-hover-drag'),
   onHoverDragStatus: (callback) => {
     const handler = (_event, data) => callback(data);
@@ -212,6 +212,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onAutotypeStopped: (callback) => ipcRenderer.on('autotype-stopped', callback),
   onSnapshotCodeAvailable: (callback) => ipcRenderer.on('snapshot-code-available', callback),
   reportCodeAvailable: (code) => ipcRenderer.send('report-code-available', { code }),
+  hideLLMResponse: () => ipcRenderer.invoke('hide-llm-response'),
+  isLLMResponseOpen: () => ipcRenderer.invoke('is-llm-response-open'),
+  onLLMWindowState: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('llm-window-state', handler);
+    return () => ipcRenderer.removeListener('llm-window-state', handler);
+  },
   
   // Generic receive method
   receive: (channel, callback) => ipcRenderer.on(channel, callback),

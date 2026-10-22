@@ -454,6 +454,8 @@ class MainWindowUI {
         this.screenshotButton = document.getElementById('screenshotButton');
         this.snapshotCopyBtn = document.getElementById('snapshotCopyBtn');
         this.snapshotCopyIcon = document.getElementById('snapshotCopyIcon');
+        this.snapshotCloseBtn = document.getElementById('snapshotCloseBtn');
+        this.snapshotCloseIcon = document.getElementById('snapshotCloseIcon');
         this.snapshotExtractedCode = '';
         this.mcqToggle = document.getElementById('mcqToggle');
         this.autoHideToggle = document.getElementById('autoHideToggle');
@@ -601,6 +603,28 @@ class MainWindowUI {
             this.snapshotCopyBtn.addEventListener('click', triggerCopySnapshotCode);
             if (window.RubicHoverDwell) {
                 window.RubicHoverDwell.attach(this.snapshotCopyBtn, triggerCopySnapshotCode, { dwellMs: 1000 });
+            }
+        }
+
+        const triggerCloseSnapshotWindow = async () => {
+            if (window.electronAPI && window.electronAPI.hideLLMResponse) {
+                await window.electronAPI.hideLLMResponse();
+            } else if (window.electronAPI && window.electronAPI.closeWindow) {
+                await window.electronAPI.closeWindow();
+            }
+            if (this.snapshotCloseBtn) {
+                this.snapshotCloseBtn.style.display = 'none';
+            }
+            if (this.snapshotCopyBtn) {
+                this.snapshotCopyBtn.style.display = 'none';
+            }
+            this.resizeWindowToContent();
+        };
+
+        if (this.snapshotCloseBtn) {
+            this.snapshotCloseBtn.addEventListener('click', triggerCloseSnapshotWindow);
+            if (window.RubicHoverDwell) {
+                window.RubicHoverDwell.attach(this.snapshotCloseBtn, triggerCloseSnapshotWindow, { dwellMs: 1000 });
             }
         }
 
@@ -1299,6 +1323,39 @@ class MainWindowUI {
             }
             if (window.electronAPI && window.electronAPI.receive) {
                 window.electronAPI.receive('snapshot-code-available', handleSnapshotCode);
+            }
+
+            // Listen for AI response window open/close state to show/hide close button
+            const handleLLMWindowState = (event, data) => {
+                const info = (data !== undefined && data !== null && typeof data === 'object') ? data : event;
+                const isOpen = !!(info && info.isOpen);
+                if (this.snapshotCloseBtn) {
+                    this.snapshotCloseBtn.style.display = isOpen ? 'inline-flex' : 'none';
+                }
+                if (!isOpen && this.snapshotCopyBtn) {
+                    this.snapshotCopyBtn.style.display = 'none';
+                }
+                this.resizeWindowToContent();
+            };
+
+            if (window.electronAPI && window.electronAPI.onLLMWindowState) {
+                window.electronAPI.onLLMWindowState(handleLLMWindowState);
+            }
+            if (window.electronAPI && window.electronAPI.receive) {
+                window.electronAPI.receive('llm-window-state', handleLLMWindowState);
+            }
+
+            // Sync initial LLM window state
+            if (window.electronAPI && window.electronAPI.isLLMResponseOpen) {
+                window.electronAPI.isLLMResponseOpen().then((isOpen) => {
+                    if (this.snapshotCloseBtn) {
+                        this.snapshotCloseBtn.style.display = isOpen ? 'inline-flex' : 'none';
+                    }
+                    if (!isOpen && this.snapshotCopyBtn) {
+                        this.snapshotCopyBtn.style.display = 'none';
+                    }
+                    this.resizeWindowToContent();
+                }).catch(() => {});
             }
 
 

@@ -6,6 +6,7 @@
     <title>AI Response</title>
     <script src="lib/markdown.js"></script>
     <script src="lib/mathrender.js"></script>
+    <script src="./src/ui/corner-hover-drag.js"></script>
     <style>
         :root {
             --bg-glass: rgba(14, 14, 14, 0.85);
@@ -68,6 +69,7 @@
             display: flex;
             align-items: center;
             gap: 6px;
+            margin-left: 12px;
         }
 
         .window-title .title-badge {
@@ -87,6 +89,7 @@
             align-items: center;
             gap: 6px;
             -webkit-app-region: no-drag;
+            margin-right: 12px;
         }
 
         .window-btn {
@@ -561,13 +564,19 @@
             if (closeBtn) {
                 closeBtn.addEventListener('click', () => {
                     try {
-                        if (api.closeWindow) api.closeWindow();
+                        if (api.hideLLMResponse) api.hideLLMResponse();
+                        else if (api.closeWindow) api.closeWindow();
                         else if (window.api && window.api.send) window.api.send('quit-app');
                         else window.close();
                     } catch (_) {
                         try { window.close(); } catch (_) {}
                     }
                 });
+            }
+
+            // 4-Corner Hover-Dwell Drag & Drop
+            if (window.initCornerHoverDrag) {
+                window.initCornerHoverDrag('llmResponse');
             }
 
             // Opacity sync

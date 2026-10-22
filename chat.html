@@ -1595,5 +1595,11 @@
         }
       }
     </script>
+    <script src="./src/ui/corner-hover-drag.js"></script>
+    <script>
+      document.addEventListener('DOMContentLoaded', () => {
+        if (window.initCornerHoverDrag) window.initCornerHoverDrag('chat');
+      });
+    </script>
   </body>
 </html>

@@ -924,12 +924,31 @@ class ApplicationController {
       return { success: true };
     });
 
-    ipcMain.handle("start-hover-drag", () => {
-      return windowManager.startHoverDrag();
+    ipcMain.handle("start-hover-drag", (event, targetWindowName) => {
+      let target = targetWindowName;
+      if (!target) {
+        for (const [name, win] of windowManager.windows.entries()) {
+          if (win && !win.isDestroyed() && win.webContents === event.sender) {
+            target = name;
+            break;
+          }
+        }
+      }
+      return windowManager.startHoverDrag(target || 'main');
     });
 
     ipcMain.handle("stop-hover-drag", () => {
       return windowManager.stopHoverDrag();
+    });
+
+    ipcMain.handle("hide-llm-response", () => {
+      windowManager.hideLLMResponse();
+      return { success: true };
+    });
+
+    ipcMain.handle("is-llm-response-open", () => {
+      const llmWindow = windowManager.windows.get('llmResponse');
+      return !!(llmWindow && !llmWindow.isDestroyed() && llmWindow.isVisible());
     });
 
     ipcMain.handle("get-session-history", () => {
@@ -1311,9 +1330,13 @@ class ApplicationController {
 
     ipcMain.handle("close-window", (event) => {
       const webContents = event.sender;
-      const window = windowManager.windows.forEach((win, type) => {
+      windowManager.windows.forEach((win, type) => {
         if (win.webContents === webContents) {
-          win.hide();
+          if (type === 'llmResponse') {
+            windowManager.hideLLMResponse();
+          } else {
+            win.hide();
+          }
           return true;
         }
       });

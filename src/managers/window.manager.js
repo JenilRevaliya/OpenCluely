@@ -292,6 +292,20 @@ class WindowManager {
         logger.info(`[RENDERER] ${message}`);
       }
     });
+
+    // Notify all windows of LLM window open/close state
+    window.on('show', () => {
+      this.isLLMWindowOpen = true;
+      this.broadcastToAllWindows('llm-window-state', { isOpen: true });
+    });
+    window.on('hide', () => {
+      setTimeout(() => {
+        if (window.isDestroyed() || !window.isVisible()) {
+          this.isLLMWindowOpen = false;
+          this.broadcastToAllWindows('llm-window-state', { isOpen: false });
+        }
+      }, 100);
+    });
     
     window.hide();
     return window;
@@ -450,7 +464,8 @@ class WindowManager {
           type: 'panel',
           titleBarStyle: 'hiddenInset',
           trafficLightPosition: { x: -100, y: -100 },
-          acceptFirstMouse: false
+          acceptFirstMouse: true,
+          disableAutoHideCursor: true
         }),
         level: process.platform === 'darwin' ? 'floating' : undefined,
       };
@@ -620,6 +635,9 @@ class WindowManager {
         if (type === 'main') {
           this.hasUserMovedBoundWindows = true;
           this.boundWindowsPosition = { x: pos[0], y: pos[1] };
+          this.debouncedSaveWindowState();
+        } else if (type === 'llmResponse') {
+          this.hasUserMovedLLMWindow = true;
           this.debouncedSaveWindowState();
         }
       }
@@ -806,6 +824,13 @@ class WindowManager {
     const llmWindow = this.windows.get('llmResponse');
     if (!llmWindow || llmWindow.isDestroyed()) return;
 
+    // Respect custom drag-and-drop location if user placed the window
+    if (this.hasUserMovedLLMWindow && this.userPositions['llmResponse']) {
+      const { x, y } = this.userPositions['llmResponse'];
+      try { llmWindow.setPosition(x, y); } catch (_) {}
+      return;
+    }
+
     const display = this.currentDisplay || screen.getPrimaryDisplay();
     const { x: displayX, y: displayY, width: screenWidth } = display.workArea;
     const [currentW, currentH] = llmWindow.getSize();
@@ -966,24 +991,25 @@ class WindowManager {
     }, 300);
   }
 
-  startHoverDrag() {
-    const mainWindow = this.windows.get('main');
-    if (!mainWindow || mainWindow.isDestroyed()) return { success: false };
+  startHoverDrag(targetWindowName = 'main') {
+    const targetWin = this.windows.get(targetWindowName);
+    if (!targetWin || targetWin.isDestroyed()) return { success: false };
 
     this.stopHoverDrag();
 
     const initialCursor = screen.getCursorScreenPoint();
-    const [winX, winY] = mainWindow.getPosition();
+    const [winX, winY] = targetWin.getPosition();
     const offsetX = initialCursor.x - winX;
     const offsetY = initialCursor.y - winY;
 
     this.isHoverDragging = true;
+    this.hoverDraggingWindowName = targetWindowName;
     let lastStationaryPoint = { x: initialCursor.x, y: initialCursor.y };
     let stationaryStartTime = Date.now();
     const dwellDurationMs = 3000;
 
     this.hoverDragInterval = setInterval(() => {
-      if (!this.isHoverDragging || mainWindow.isDestroyed()) {
+      if (!this.isHoverDragging || targetWin.isDestroyed()) {
         this.stopHoverDrag();
         return;
       }
@@ -994,17 +1020,17 @@ class WindowManager {
 
       const display = screen.getDisplayNearestPoint(curCursor);
       const { x: displayX, y: displayY, width: screenWidth, height: screenHeight } = display.workArea;
-      const [mainWidth, mainHeight] = mainWindow.getSize();
+      const [winWidth, winHeight] = targetWin.getSize();
 
-      const clampedX = Math.max(displayX, Math.min(displayX + screenWidth - mainWidth, Math.round(newX)));
-      const clampedY = Math.max(displayY, Math.min(displayY + screenHeight - mainHeight, Math.round(newY)));
+      const clampedX = Math.max(displayX, Math.min(displayX + screenWidth - winWidth, Math.round(newX)));
+      const clampedY = Math.max(displayY, Math.min(displayY + screenHeight - winHeight, Math.round(newY)));
 
-      mainWindow.setPosition(clampedX, clampedY);
+      targetWin.setPosition(clampedX, clampedY);
 
-      if (this.bindWindows) {
+      if (targetWindowName === 'main' && this.bindWindows) {
         const llmWindow = this.windows.get('llmResponse');
-        if (llmWindow && !llmWindow.isDestroyed() && llmWindow.isVisible()) {
-          llmWindow.setPosition(clampedX, clampedY + mainHeight + this.windowGap);
+        if (llmWindow && !llmWindow.isDestroyed() && llmWindow.isVisible() && !this.hasUserMovedLLMWindow) {
+          llmWindow.setPosition(clampedX, clampedY + winHeight + this.windowGap);
         }
       }
 
@@ -1016,9 +1042,10 @@ class WindowManager {
         lastStationaryPoint = { x: curCursor.x, y: curCursor.y };
         stationaryStartTime = now;
         try {
-          mainWindow.webContents.send('hover-drag-status', {
+          targetWin.webContents.send('hover-drag-status', {
             isStationary: false,
-            progress: 0
+            progress: 0,
+            targetWindow: targetWindowName
           });
         } catch (_) {}
       } else {
@@ -1027,9 +1054,10 @@ class WindowManager {
         const progress = Math.min(elapsed / dwellDurationMs, 1.0);
 
         try {
-          mainWindow.webContents.send('hover-drag-status', {
+          targetWin.webContents.send('hover-drag-status', {
             isStationary: true,
-            progress
+            progress,
+            targetWindow: targetWindowName
           });
         } catch (_) {}
 
@@ -1037,9 +1065,10 @@ class WindowManager {
           // Unhook after 3 continuous seconds remaining at new location
           this.stopHoverDrag();
           try {
-            mainWindow.webContents.send('hover-drag-unhooked', {
+            targetWin.webContents.send('hover-drag-unhooked', {
               x: clampedX,
-              y: clampedY
+              y: clampedY,
+              targetWindow: targetWindowName
             });
           } catch (_) {}
         }
@@ -1055,14 +1084,20 @@ class WindowManager {
       clearInterval(this.hoverDragInterval);
       this.hoverDragInterval = null;
     }
-    const mainWindow = this.windows.get('main');
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      const [x, y] = mainWindow.getPosition();
-      this.userPositions['main'] = { x, y };
-      this.boundWindowsPosition = { x, y };
-      this.hasUserMovedBoundWindows = true;
+    const targetName = this.hoverDraggingWindowName || 'main';
+    const targetWin = this.windows.get(targetName);
+    if (targetWin && !targetWin.isDestroyed()) {
+      const [x, y] = targetWin.getPosition();
+      this.userPositions[targetName] = { x, y };
+      if (targetName === 'main') {
+        this.boundWindowsPosition = { x, y };
+        this.hasUserMovedBoundWindows = true;
+      } else if (targetName === 'llmResponse') {
+        this.hasUserMovedLLMWindow = true;
+      }
       this.saveWindowState();
     }
+    this.hoverDraggingWindowName = null;
     return { success: true };
   }
 
@@ -1663,6 +1698,8 @@ class WindowManager {
     
     logger.debug('Showing LLM window');
     this.showOnCurrentDesktop(llmWindow);
+    this.isLLMWindowOpen = true;
+    this.broadcastToAllWindows('llm-window-state', { isOpen: true });
     const targetOpacity = (this.isAutoHideMode && this.autoHideState === 'hidden')
       ? 0
       : (this.currentOpacity !== undefined ? Math.max(0.20, Math.min(1.0, this.currentOpacity)) : 0.95);
@@ -1692,6 +1729,8 @@ class WindowManager {
     }
 
     this.showOnCurrentDesktop(llmWindow);
+    this.isLLMWindowOpen = true;
+    this.broadcastToAllWindows('llm-window-state', { isOpen: true });
     const targetOpacity = (this.isAutoHideMode && this.autoHideState === 'hidden')
       ? 0
       : (this.currentOpacity !== undefined ? Math.max(0.20, Math.min(1.0, this.currentOpacity)) : 0.95);
@@ -1717,6 +1756,8 @@ class WindowManager {
       logger.debug('Showing LLM loading state', { questionPreview });
       llmWindow.webContents.send('show-loading', questionPreview);
       this.showOnCurrentDesktop(llmWindow);
+      this.isLLMWindowOpen = true;
+      this.broadcastToAllWindows('llm-window-state', { isOpen: true });
       const targetOpacity = (this.isAutoHideMode && this.autoHideState === 'hidden')
         ? 0
         : (this.currentOpacity !== undefined ? Math.max(0.20, Math.min(1.0, this.currentOpacity)) : 0.95);
@@ -1732,10 +1773,15 @@ class WindowManager {
   }
 
   hideLLMResponse() {
+    if (this.isHoverDragging && this.hoverDraggingWindowName === 'llmResponse') {
+      this.stopHoverDrag();
+    }
     const llmWindow = this.windows.get('llmResponse');
-    if (llmWindow) {
+    if (llmWindow && !llmWindow.isDestroyed()) {
       llmWindow.hide();
     }
+    this.isLLMWindowOpen = false;
+    this.broadcastToAllWindows('llm-window-state', { isOpen: false });
   }
 
   showSettings() {
