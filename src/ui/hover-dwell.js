@@ -11,7 +11,7 @@
 class HoverDwellManager {
   constructor() {
     this._enabled = true; // Enabled across all menu bar buttons
-    this._dwellMs = 3000;
+    this._dwellMs = 1000; // 1 second dwell duration
     this._attachments = new Map(); // element -> { action, timer, progressEl }
     this._isMouseDown = false;
 

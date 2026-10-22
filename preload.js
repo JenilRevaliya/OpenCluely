@@ -210,6 +210,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onAutotypeProgress: (callback) => ipcRenderer.on('autotype-progress', callback),
   onAutotypeCompleted: (callback) => ipcRenderer.on('autotype-completed', callback),
   onAutotypeStopped: (callback) => ipcRenderer.on('autotype-stopped', callback),
+  onSnapshotCodeAvailable: (callback) => ipcRenderer.on('snapshot-code-available', callback),
   
   // Generic receive method
   receive: (channel, callback) => ipcRenderer.on(channel, callback),

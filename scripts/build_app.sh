@@ -28,6 +28,11 @@ if [ -f "$PROJECT_DIR/scripts/system_audio_recorder.swift" ]; then
     swiftc -O "$PROJECT_DIR/scripts/system_audio_recorder.swift" -o "$PROJECT_DIR/scripts/system_audio_recorder" 2>/dev/null || true
 fi
 
+if [ -f "$PROJECT_DIR/scripts/native_typer.swift" ]; then
+    echo "Compiling native_typer helper..."
+    swiftc -O "$PROJECT_DIR/scripts/native_typer.swift" -o "$PROJECT_DIR/scripts/native_typer" 2>/dev/null || true
+fi
+
 # 2. Re-create /Applications/Setting.app
 echo "Packaging into $APP_TARGET..."
 rm -rf "$APP_TARGET"
@@ -58,6 +63,11 @@ fi
 if [ -f "$PROJECT_DIR/scripts/system_audio_recorder" ]; then
     cp "$PROJECT_DIR/scripts/system_audio_recorder" "$APP_TARGET/Contents/MacOS/system_audio_recorder"
     chmod +x "$APP_TARGET/Contents/MacOS/system_audio_recorder"
+fi
+
+if [ -f "$PROJECT_DIR/scripts/native_typer" ]; then
+    cp "$PROJECT_DIR/scripts/native_typer" "$APP_TARGET/Contents/MacOS/native_typer"
+    chmod +x "$APP_TARGET/Contents/MacOS/native_typer"
 fi
 
 # 4. Copy authentic macOS System Settings icons

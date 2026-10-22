@@ -13,9 +13,7 @@ print("Setting Permission Helper running under bundle: \(bundleId)")
 let hasScreenAccess = CGPreflightScreenCaptureAccess()
 print("Screen capture preflight status: \(hasScreenAccess)")
 if !hasScreenAccess {
-    print("Requesting screen capture access...")
-    let requested = CGRequestScreenCaptureAccess()
-    print("CGRequestScreenCaptureAccess returned: \(requested)")
+    print("Screen capture access not granted.")
 } else {
     print("Screen capture access already granted.")
 }
@@ -34,6 +32,10 @@ if micStatus == .notDetermined {
 } else {
     print("Microphone access status already determined: \(micStatus == .authorized ? "Authorized" : "Not Authorized")")
 }
+
+// 3. Accessibility Permission (Required for keyboard input injection)
+let isAccessibilityTrusted = AXIsProcessTrusted()
+print("Accessibility authorization status: \(isAccessibilityTrusted)")
 
 print("Permissions check complete.")
 exit(0)

@@ -451,7 +451,7 @@ class MainWindowUI {
         this.languageSelect = document.getElementById('codingLanguage');
         this.infoButton = document.getElementById('infoButton');
         this.shortcutsPopover = document.getElementById('shortcutsPopover');
-        this.screenshotButton = document.getElementById('screenshotButton') || document.querySelector('.command-item');
+        this.screenshotButton = document.getElementById('screenshotButton');
         this.mcqToggle = document.getElementById('mcqToggle');
         this.autoHideToggle = document.getElementById('autoHideToggle');
         this.autoTypeButton = document.getElementById('autoTypeButton');
@@ -556,15 +556,17 @@ class MainWindowUI {
             throw new Error('Required UI elements not found');
         }
 
-        // 1. Screenshot click & hover-dwell handler
+        // 1. Screenshot click & hover-dwell handler (1 second forward hover or instant click)
         const triggerScreenshotAction = () => {
             if (window.electronAPI && window.electronAPI.takeScreenshot) {
                 window.electronAPI.takeScreenshot();
             }
         };
-        this.screenshotButton.addEventListener('click', triggerScreenshotAction);
-        if (window.RubicHoverDwell) {
-            window.RubicHoverDwell.attach(this.screenshotButton, triggerScreenshotAction);
+        if (this.screenshotButton) {
+            this.screenshotButton.addEventListener('click', triggerScreenshotAction);
+            if (window.RubicHoverDwell) {
+                window.RubicHoverDwell.attach(this.screenshotButton, triggerScreenshotAction, { dwellMs: 1000 });
+            }
         }
 
         if (this.targetModeBtn) {
@@ -663,7 +665,7 @@ class MainWindowUI {
         if (this.rubicButton) {
             this.rubicButton.addEventListener('click', triggerRubicAction);
             if (window.RubicHoverDwell) {
-                window.RubicHoverDwell.attach(this.rubicButton, triggerRubicAction);
+                window.RubicHoverDwell.attach(this.rubicButton, triggerRubicAction, { dwellMs: 1000 });
             }
         }
 
@@ -736,7 +738,7 @@ class MainWindowUI {
         const triggerAutoTypeAction = async () => {
             if (window.electronAPI && window.electronAPI.typeClipboard) {
                 try {
-                    await window.electronAPI.typeClipboard({ startDelay: 0.6 });
+                    await window.electronAPI.typeClipboard();
                 } catch (e) {
                     logger.error('Failed to trigger auto-type', e);
                 }
@@ -1239,6 +1241,8 @@ class MainWindowUI {
                 this.updateAutoTypeState();
                 logger.info('Auto-type stopped in UI', data);
             });
+
+
             
             // Global keyboard shortcuts
             document.addEventListener('keydown', (e) => {

@@ -8,14 +8,12 @@
     <script src="lib/mathrender.js"></script>
     <style>
         :root {
-            --bg-glass: rgba(10, 14, 23, 0.78);
-            --border-glass: rgba(255, 255, 255, 0.14);
-            --accent-cyan: #38bdf8;
-            --accent-green: #22c55e;
+            --bg-glass: rgba(14, 14, 14, 0.85);
+            --border-glass: rgba(255, 255, 255, 0.12);
             --text-primary: rgba(255, 255, 255, 0.95);
             --text-secondary: rgba(255, 255, 255, 0.70);
-            --text-muted: rgba(255, 255, 255, 0.50);
-            --code-bg: rgba(0, 0, 0, 0.45);
+            --text-muted: rgba(255, 255, 255, 0.45);
+            --code-bg: rgba(0, 0, 0, 0.55);
         }
 
         *, *::before, *::after {
@@ -25,9 +23,9 @@
         }
 
         body {
-            background: linear-gradient(135deg, rgba(8, 12, 20, 0.75) 0%, rgba(15, 23, 42, 0.85) 100%);
-            backdrop-filter: blur(24px) saturate(160%);
-            -webkit-backdrop-filter: blur(24px) saturate(160%);
+            background: rgba(13, 13, 13, 0.88);
+            backdrop-filter: blur(28px);
+            -webkit-backdrop-filter: blur(28px);
             border-radius: 10px;
             border: 1px solid var(--border-glass);
             -webkit-app-region: no-drag;
@@ -39,7 +37,7 @@
             font-size: 13px;
             line-height: 1.55;
             letter-spacing: 0.1px;
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.1);
             user-select: text;
         }
 
@@ -55,7 +53,7 @@
             align-items: center;
             justify-content: space-between;
             padding: 0 12px;
-            background: rgba(0, 0, 0, 0.40);
+            background: rgba(0, 0, 0, 0.55);
             border-bottom: 1px solid rgba(255, 255, 255, 0.10);
             z-index: 50;
             color: var(--text-secondary);
@@ -73,9 +71,9 @@
         }
 
         .window-title .title-badge {
-            background: rgba(56, 189, 248, 0.15);
-            border: 1px solid rgba(56, 189, 248, 0.4);
-            color: #38bdf8;
+            background: rgba(255, 255, 255, 0.10);
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            color: #ffffff;
             font-size: 9.5px;
             font-weight: 700;
             padding: 1px 5px;
@@ -109,15 +107,15 @@
         }
 
         .window-btn:hover {
-            background: rgba(255, 255, 255, 0.18);
-            color: #fff;
-            border-color: rgba(255, 255, 255, 0.3);
+            background: rgba(255, 255, 255, 0.22);
+            color: #ffffff;
+            border-color: rgba(255, 255, 255, 0.35);
         }
 
         .window-btn-close:hover {
-            background: rgba(239, 68, 68, 0.35);
-            border-color: rgba(239, 68, 68, 0.6);
-            color: #fff;
+            background: rgba(255, 255, 255, 0.28);
+            border-color: rgba(255, 255, 255, 0.45);
+            color: #ffffff;
         }
 
         /* ── Main Container ── */
@@ -148,7 +146,7 @@
             align-items: center;
             justify-content: center;
             gap: 10px;
-            background: rgba(0, 0, 0, 0.4);
+            background: rgba(0, 0, 0, 0.5);
             border: 1px solid rgba(255, 255, 255, 0.1);
             padding: 8px 18px;
             border-radius: 20px;
@@ -172,7 +170,7 @@
             width: 6px;
             height: 6px;
             border-radius: 50%;
-            background-color: var(--accent-cyan);
+            background-color: #ffffff;
             animation: bounce 1.3s infinite ease-in-out;
         }
 
@@ -204,7 +202,7 @@
         }
 
         .text-panel, .code-panel {
-            background: rgba(0, 0, 0, 0.25);
+            background: rgba(0, 0, 0, 0.35);
             border-radius: 8px;
             border: 1px solid rgba(255, 255, 255, 0.08);
             overflow: hidden;
@@ -240,7 +238,7 @@
 
         .full-content-inner {
             height: 100%;
-            background: rgba(0, 0, 0, 0.25);
+            background: rgba(0, 0, 0, 0.35);
             border-radius: 8px;
             border: 1px solid rgba(255, 255, 255, 0.08);
             overflow-y: auto;
@@ -256,7 +254,7 @@
             display: none;
         }
 
-        /* ── Markdown Content Styling ── */
+        /* ── Markdown Content Styling (Strict Monochrome) ── */
         .markdown-content {
             line-height: 1.6;
             color: var(--text-primary);
@@ -267,11 +265,11 @@
             margin-top: 1rem;
             margin-bottom: 0.5rem;
             font-weight: 700;
-            color: #fff;
+            color: #ffffff;
         }
 
         .markdown-content h1 { font-size: 1.25rem; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 4px; }
-        .markdown-content h2 { font-size: 1.15rem; color: #38bdf8; }
+        .markdown-content h2 { font-size: 1.15rem; color: #ffffff; }
         .markdown-content h3 { font-size: 1.05rem; }
         .markdown-content p { margin-bottom: 0.65rem; }
         .markdown-content ul, .markdown-content ol { margin-bottom: 0.65rem; padding-left: 1.4rem; }
@@ -283,7 +281,8 @@
             border-radius: 0.25rem;
             font-family: 'JetBrains Mono', 'Courier New', monospace;
             font-size: 12px;
-            color: #38bdf8;
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.12);
         }
 
         .markdown-content pre {
@@ -299,18 +298,19 @@
         .markdown-content pre code {
             background-color: transparent;
             padding: 0;
-            color: #f1f5f9;
+            color: #ffffff;
             font-size: 12px;
             line-height: 1.45;
+            border: none;
         }
 
         .markdown-content blockquote {
-            border-left: 3px solid #38bdf8;
+            border-left: 3px solid rgba(255, 255, 255, 0.6);
             padding-left: 0.85rem;
             margin: 0.65rem 0;
             font-style: italic;
             color: var(--text-secondary);
-            background: rgba(56, 189, 248, 0.05);
+            background: rgba(255, 255, 255, 0.05);
             border-radius: 0 4px 4px 0;
         }
 
@@ -319,21 +319,21 @@
             white-space: nowrap;
         }
 
-        /* ── MCQ High-Visibility Badges & Options ── */
+        /* ── MCQ High-Visibility Monochrome Badges & Options ── */
         .mcq-answer-pill {
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            background: rgba(34, 197, 94, 0.20);
-            border: 1.5px solid rgba(34, 197, 94, 0.65);
-            color: #4ade80;
+            background: rgba(255, 255, 255, 0.12);
+            border: 1.5px solid rgba(255, 255, 255, 0.55);
+            color: #ffffff;
             padding: 4px 10px;
             border-radius: 6px;
             font-weight: 700;
             font-size: 13.5px;
             letter-spacing: 0.4px;
             margin: 6px 0 10px 0;
-            box-shadow: 0 0 14px rgba(34, 197, 94, 0.25);
+            box-shadow: 0 0 14px rgba(255, 255, 255, 0.1);
         }
 
         .mcq-option-line {
@@ -345,10 +345,10 @@
         }
 
         .mcq-option-line.correct {
-            background: rgba(34, 197, 94, 0.15);
-            border-color: rgba(34, 197, 94, 0.5);
+            background: rgba(255, 255, 255, 0.14);
+            border-color: rgba(255, 255, 255, 0.5);
             font-weight: 600;
-            color: #4ade80;
+            color: #ffffff;
         }
 
         /* ── Code Blocks with Language Header & Hover Copy Button ── */
@@ -362,7 +362,7 @@
         }
 
         .code-header {
-            background-color: rgba(0, 0, 0, 0.5);
+            background-color: rgba(0, 0, 0, 0.6);
             padding: 5px 10px;
             font-family: 'JetBrains Mono', 'Courier New', monospace;
             font-size: 11px;
@@ -392,10 +392,11 @@
 
         .code-content code {
             background: transparent;
-            color: #f8fafc;
+            color: #ffffff;
             font-family: 'JetBrains Mono', 'Courier New', monospace;
             font-size: 12px;
             line-height: 1.45;
+            border: none;
         }
 
         .no-code {
@@ -407,13 +408,13 @@
             font-style: italic;
         }
 
-        /* ── Hover Copy Button ── */
+        /* ── 3-Second Hover Copy Button (Monochrome & Dwell Feedback) ── */
         .copy-btn {
             position: absolute;
             top: 6px;
             right: 8px;
-            background: rgba(15, 23, 42, 0.85);
-            color: var(--text-secondary);
+            background: rgba(24, 24, 27, 0.85);
+            color: rgba(255, 255, 255, 0.75);
             border: 1px solid rgba(255, 255, 255, 0.2);
             padding: 4px 10px;
             font-size: 11px;
@@ -422,32 +423,58 @@
             cursor: pointer;
             -webkit-app-region: no-drag;
             transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-            opacity: 0.5;
+            opacity: 0.65;
             display: inline-flex;
             align-items: center;
-            gap: 4px;
+            gap: 5px;
             z-index: 25;
             user-select: none;
             backdrop-filter: blur(8px);
+            overflow: hidden;
+            position: absolute;
+        }
+
+        .copy-btn .copy-progress-fill {
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            width: 0%;
+            background: rgba(255, 255, 255, 0.25);
+            transition: width 0.05s linear;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .copy-btn .copy-label {
+            position: relative;
+            z-index: 2;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
         }
 
         pre:hover .copy-btn,
         .code-block:hover .copy-btn,
         .copy-btn:hover {
             opacity: 1;
-            background: rgba(15, 23, 42, 0.98);
-            border-color: rgba(56, 189, 248, 0.6);
-            color: #38bdf8;
+            background: rgba(32, 32, 35, 0.95);
+            border-color: rgba(255, 255, 255, 0.5);
+            color: #ffffff;
             transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.55);
         }
 
         .copy-btn.copied {
-            background: rgba(34, 197, 94, 0.95) !important;
-            border-color: rgba(34, 197, 94, 1) !important;
-            color: #fff !important;
+            background: #ffffff !important;
+            border-color: #ffffff !important;
+            color: #000000 !important;
             opacity: 1 !important;
             transform: scale(0.98);
+        }
+
+        .copy-btn.copied .copy-progress-fill {
+            display: none;
         }
 
         /* ── Helper utilities ── */
@@ -695,8 +722,18 @@
         }
 
         function attachCopy(btn, text) {
-            btn.addEventListener('click', async (e) => {
-                e.stopPropagation();
+            btn.innerHTML = '<span class="copy-progress-fill"></span><span class="copy-label">Copy</span>';
+            const fill = btn.querySelector('.copy-progress-fill');
+            const label = btn.querySelector('.copy-label');
+
+            let dwellTimer = null;
+            let dwellStart = null;
+            let dwellAnimFrame = null;
+            const DWELL_MS = 3000;
+
+            const performCopy = async (e) => {
+                if (e) e.stopPropagation();
+                cancelDwell();
                 try {
                     let ok = false;
                     if (window.electronAPI && typeof window.electronAPI.copyToClipboard === 'function') {
@@ -717,16 +754,63 @@
                     }
                     if (ok) {
                         btn.classList.add('copied');
-                        const originalHtml = btn.innerHTML;
-                        btn.innerHTML = '✓ Copied';
+                        label.innerHTML = '✓ Copied';
                         setTimeout(() => {
                             btn.classList.remove('copied');
-                            btn.innerHTML = originalHtml;
+                            label.innerHTML = 'Copy';
                         }, 1400);
                     }
                 } catch (err) {
                     console.warn('[LLM-RESPONSE] Copy failed', err);
                 }
+            };
+
+            const cancelDwell = () => {
+                if (dwellTimer) {
+                    clearTimeout(dwellTimer);
+                    dwellTimer = null;
+                }
+                if (dwellAnimFrame) {
+                    cancelAnimationFrame(dwellAnimFrame);
+                    dwellAnimFrame = null;
+                }
+                dwellStart = null;
+                if (fill) fill.style.width = '0%';
+                if (!btn.classList.contains('copied')) {
+                    label.innerHTML = 'Copy';
+                }
+            };
+
+            btn.addEventListener('mouseenter', () => {
+                if (btn.classList.contains('copied')) return;
+                dwellStart = Date.now();
+
+                const updateProgress = () => {
+                    if (!dwellStart) return;
+                    const elapsed = Date.now() - dwellStart;
+                    const pct = Math.min(100, (elapsed / DWELL_MS) * 100);
+                    if (fill) fill.style.width = `${pct}%`;
+                    const remSec = Math.max(1, Math.ceil((DWELL_MS - elapsed) / 1000));
+                    if (!btn.classList.contains('copied')) {
+                        label.innerHTML = `Copy (${remSec}s)`;
+                    }
+                    if (elapsed < DWELL_MS) {
+                        dwellAnimFrame = requestAnimationFrame(updateProgress);
+                    }
+                };
+                dwellAnimFrame = requestAnimationFrame(updateProgress);
+
+                dwellTimer = setTimeout(() => {
+                    performCopy();
+                }, DWELL_MS);
+            });
+
+            btn.addEventListener('mouseleave', () => {
+                cancelDwell();
+            });
+
+            btn.addEventListener('click', (e) => {
+                performCopy(e);
             });
         }
 

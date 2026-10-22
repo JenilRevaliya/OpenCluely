@@ -1,5 +1,6 @@
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const { EventEmitter } = require('events');
 const { clipboard } = require('electron');
 const logger = require('../core/logger').createServiceLogger('AUTOTYPE');
@@ -10,7 +11,22 @@ class AutoTypeService extends EventEmitter {
     this.currentProcess = null;
     this._isTyping = false;
     this.pythonScriptPath = path.join(__dirname, '../../scripts/human_typer.py');
-    this.pythonCommand = process.platform === 'win32' ? 'python' : 'python3';
+    this.pythonCommand = fs.existsSync('/opt/homebrew/bin/python3')
+      ? '/opt/homebrew/bin/python3'
+      : (process.platform === 'win32' ? 'python' : 'python3');
+    this.lastCode = '';
+  }
+
+  setLastCode(code) {
+    this.lastCode = code || '';
+  }
+
+  /**
+   * Resolve the typer executable.
+   * Directly uses human_typer.py which has proven, verified native CoreGraphics HID injection.
+   */
+  getTyperExecutable() {
+    return { command: this.pythonCommand, args: [this.pythonScriptPath, '--stdin'] };
   }
 
   /**
@@ -41,7 +57,7 @@ class AutoTypeService extends EventEmitter {
     const {
       minWpm = 90.0,
       maxWpm = 120.0,
-      startDelay = 0.35 // Give user brief pause after triggering shortcut
+      startDelay = 0.6 // Must be ≥0.6 s — OS needs time to shift focus back to target app after we blur
     } = options;
 
     return new Promise((resolve) => {
@@ -56,7 +72,10 @@ class AutoTypeService extends EventEmitter {
       });
 
       try {
-        this.currentProcess = spawn(this.pythonCommand, [this.pythonScriptPath, '--stdin'], {
+        const { command, args } = this.getTyperExecutable();
+        logger.info('Spawning AutoType engine', { command, args });
+
+        this.currentProcess = spawn(command, args, {
           stdio: ['pipe', 'pipe', 'pipe']
         });
 
@@ -100,8 +119,7 @@ class AutoTypeService extends EventEmitter {
           this._isTyping = false;
           this.currentProcess = null;
           this.emit('autotype-error', { error: err.message });
-          // Fallback to pure node-based typing if python fails
-          this.fallbackType(text, minWpm, maxWpm, resolve);
+          resolve({ success: false, error: err.message });
         });
 
         this.currentProcess.on('close', (code) => {
@@ -117,7 +135,7 @@ class AutoTypeService extends EventEmitter {
         logger.error('Failed to spawn autotype process:', { error: error.message });
         this._isTyping = false;
         this.emit('autotype-error', { error: error.message });
-        this.fallbackType(text, minWpm, maxWpm, resolve);
+        resolve({ success: false, error: error.message });
       }
     });
   }
@@ -271,6 +289,10 @@ class AutoTypeService extends EventEmitter {
     } catch (e) {
       logger.error('Failed to read from clipboard:', { error: e.message });
       return { success: false, reason: 'clipboard_read_failed', error: e.message };
+    }
+
+    if ((!clipboardText || clipboardText.trim().length === 0) && this.lastCode) {
+      clipboardText = this.lastCode;
     }
 
     if (!clipboardText || clipboardText.trim().length === 0) {

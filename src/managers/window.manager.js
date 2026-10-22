@@ -381,7 +381,7 @@ class WindowManager {
         })
       };
   } else if (type === 'onboarding') {
-      // First-run onboarding wizard — same frameless/panel style as
+      // First-run onboarding wizard — same frameless style as
       // settings, but closable (X button) and slightly larger.
       browserWindowOptions = {
         ...baseOptions,
@@ -484,6 +484,7 @@ class WindowManager {
         ...baseOptions,
         ...windowConfig,
         ...(process.platform === 'darwin' && {
+          type: 'panel',
           titleBarStyle: windowConfig.titleBarStyle || (windowConfig.frame === false ? 'hiddenInset' : 'default'),
           trafficLightPosition: { x: -100, y: -100 },
           acceptFirstMouse: true
@@ -1069,15 +1070,21 @@ class WindowManager {
     if (!win || win.isDestroyed()) return;
 
     if (process.platform === 'darwin') {
-      // macOS: Keep window visible across all workspaces, spaces, and fullscreen assessments without stealing focus
-      const applySpaceAndLevel = () => {
+      // macOS: prevent space switching and keep visibility stable across all desktops/fullscreens
+      win.hide();
+      win.setVisibleOnAllWorkspaces(true, {
+        visibleOnFullScreen: true,
+        skipTransformProcessType: true
+      });
+
+      const setMacOSAlwaysOnTop = () => {
         if (win.isDestroyed()) return;
         try {
+          win.setAlwaysOnTop(true, 'screen-saver', 2);
           win.setVisibleOnAllWorkspaces(true, {
             visibleOnFullScreen: true,
             skipTransformProcessType: true
           });
-          win.setAlwaysOnTop(true, 'screen-saver', 2);
           win.setContentProtection(true);
         } catch {
           try { win.setAlwaysOnTop(true, 'pop-up-menu', 2); }
@@ -1086,20 +1093,21 @@ class WindowManager {
         }
       };
 
-      applySpaceAndLevel();
-
-      // Show inactive so we never steal focus from full-screen assessment apps
-      if (!win.isVisible()) {
-        win.showInactive();
-      }
-      applySpaceAndLevel();
+      setMacOSAlwaysOnTop();
 
       setTimeout(() => {
-        if (!win.isDestroyed()) applySpaceAndLevel();
-      }, 100);
-      setTimeout(() => {
-        if (!win.isDestroyed()) applySpaceAndLevel();
-      }, 300);
+        if (win.isDestroyed()) return;
+        win.show();
+        if (win.isFocusable && win.isFocusable()) {
+          win.focus();
+        }
+        setMacOSAlwaysOnTop();
+        setTimeout(() => { if (!win.isDestroyed()) setMacOSAlwaysOnTop(); }, 100);
+        setTimeout(() => {
+          if (win.isDestroyed()) return;
+          setMacOSAlwaysOnTop();
+        }, 300);
+      }, 50);
     } else {
       // Linux/Windows
       win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });

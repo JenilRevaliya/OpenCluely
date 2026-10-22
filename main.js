@@ -174,6 +174,10 @@ class ApplicationController {
     this._utteranceTimer = null;
     this._utteranceDispatchInFlight = false;
     this._utteranceCoalesceMs = 700;
+
+    // Track the last non-Electron frontmost app so we can activate it before typing
+    this.lastExternalFrontApp = null;
+    this._frontAppTracker = null;
     this._activeLlmAbortController = null;
     this._currentLlmRequestId = 0;
 
@@ -386,6 +390,26 @@ class ApplicationController {
       // Start tracking clipboard history across sessions
       clipboardTrackerManager.start();
 
+      // ── Frontmost-app tracker ──────────────────────────────────────────────
+      // We need to know which app was active before the user clicks our bar.
+      // Poll every 500 ms via osascript; skip our own process so we always
+      // have the correct target ready when auto-type is triggered.
+      if (process.platform === 'darwin') {
+        const { exec } = require('child_process');
+        this._frontAppTracker = setInterval(() => {
+          exec(
+            `osascript -e 'tell application "System Events" to get name of first process whose frontmost is true'`,
+            (err, stdout) => {
+              if (err || !stdout) return;
+              const name = stdout.trim();
+              if (name && !name.toLowerCase().includes('setting') && !name.toLowerCase().includes('electron')) {
+                this.lastExternalFrontApp = name;
+              }
+            }
+          );
+        }, 500);
+      }
+
       logger.info("All windows initialized successfully", {
         windowCount: Object.keys(windowManager.getWindowStats().windows).length,
         currentDesktop: "detected",
@@ -485,42 +509,6 @@ class ApplicationController {
       }
     );
 
-    // macOS: Explicitly trigger OS-level Screen Recording and Microphone requests
-    // so Setting appears immediately in System Settings -> Privacy & Security
-    if (process.platform === "darwin") {
-      try {
-        const helperPath = path.join(process.resourcesPath, "../MacOS/request_permissions");
-        const fallbackHelperPath = path.join(__dirname, "scripts/request_permissions");
-        const finalHelper = fs.existsSync(helperPath)
-          ? helperPath
-          : fs.existsSync(fallbackHelperPath)
-          ? fallbackHelperPath
-          : null;
-        if (finalHelper) {
-          require("child_process").execFile(finalHelper, [], (err, stdout) => {
-            if (err) {
-              logger.warn("macOS permission helper warning:", { error: err.message });
-            } else {
-              logger.info("macOS permission helper output:", stdout ? stdout.trim() : "");
-            }
-          });
-        }
-      } catch (e) {
-        logger.warn("Failed to execute native permission helper:", { error: e.message });
-      }
-
-      try {
-        const { systemPreferences, desktopCapturer } = require("electron");
-        if (systemPreferences && typeof systemPreferences.askForMediaAccess === "function") {
-          systemPreferences.askForMediaAccess("microphone").then((granted) => {
-            logger.info("systemPreferences microphone access:", granted);
-          }).catch(() => {});
-        }
-        if (desktopCapturer && typeof desktopCapturer.getSources === "function") {
-          desktopCapturer.getSources({ types: ["screen"] }).catch(() => {});
-        }
-      } catch (_) {}
-    }
   }
 
   setupGlobalShortcuts() {
@@ -1368,13 +1356,57 @@ class ApplicationController {
       autoTypeService.stop();
       return { success: false, stopped: true };
     }
-    logger.info("Auto-type triggered for clipboard content");
+    logger.info("Auto-type triggered for clipboard content", {
+      targetApp: this.lastExternalFrontApp || '(unknown)'
+    });
+
+    // ── Focus Hand-off (reliable) ────────────────────────────────────────────
+    // win.blur() on a transparent floating macOS window does NOT reliably
+    // transfer OS keyboard focus back to the user's target app. We must
+    // explicitly activate the target app by name via NSRunningApplication.
+    //
+    // Strategy:
+    //   1. _frontAppTracker polls every 500 ms and stores the last non-Electron
+    //      frontmost app in this.lastExternalFrontApp.
+    //   2. We activate that app via osascript right now.
+    //   3. Give it 350 ms to complete the focus transition.
+    //   4. Python starts typing with start_delay=0.1 (minimal extra pause).
+    //
+    // Fallback: if tracker hasn't seen an external app yet, blur all windows
+    // and use a 600 ms start_delay as before.
+    if (process.platform === 'darwin' && this.lastExternalFrontApp) {
+      const targetApp = this.lastExternalFrontApp;
+      const { exec } = require('child_process');
+      return new Promise((resolve) => {
+        exec(
+          `osascript -e 'tell application "${targetApp.replace(/"/g, '\\"')}" to activate'`,
+          (err) => {
+            if (err) {
+              logger.warn('Could not activate target app via osascript', {
+                app: targetApp, error: err.message
+              });
+            } else {
+              logger.info('Activated target app for typing', { app: targetApp });
+            }
+            // 350 ms is enough for NSRunningApplication to complete activation
+            setTimeout(() => {
+              resolve(autoTypeService.typeClipboard({ startDelay: 0.1, ...options }));
+            }, 350);
+          }
+        );
+      });
+    }
+
+    // Fallback: blur all windows and use a long start_delay
     try {
-      const { BrowserWindow } = require('electron');
-      const focusedWin = BrowserWindow.getFocusedWindow();
-      if (focusedWin) focusedWin.blur();
-    } catch (_) {}
-    return autoTypeService.typeClipboard(options);
+      const allWins = BrowserWindow.getAllWindows();
+      for (const win of allWins) {
+        if (!win.isDestroyed()) win.blur();
+      }
+    } catch (e) {
+      logger.warn('Could not blur windows before auto-type', { error: e.message });
+    }
+    return autoTypeService.typeClipboard({ startDelay: 0.6, ...options });
   }
 
   toggleMcqMode() {
@@ -1833,6 +1865,36 @@ class ApplicationController {
         usedFallback: llmResult.metadata.usedFallback,
         isImageAnalysis: true
       });
+
+      // Extract generated code blocks for the snapshot circular copy button & smart typer
+      try {
+        const codeBlockRegex = /```(?:[a-zA-Z0-9_\-\.\+#]*)(?:[^\n\r]*)\r?\n([\s\S]*?)```/g;
+        const extractedCodes = [];
+        let codeMatch;
+        while ((codeMatch = codeBlockRegex.exec(llmResult.response)) !== null) {
+          if (codeMatch[1] && codeMatch[1].trim()) {
+            extractedCodes.push(codeMatch[1].trim());
+          }
+        }
+        let combinedCode = extractedCodes.join('\n\n');
+        if (!combinedCode && llmResult.response && typeof llmResult.response === 'string') {
+          combinedCode = llmResult.response.trim();
+        }
+        if (combinedCode) {
+          autoTypeService.setLastCode(combinedCode);
+          windowManager.broadcastToAllWindows("snapshot-code-available", {
+            hasCode: true,
+            code: combinedCode
+          });
+        } else {
+          windowManager.broadcastToAllWindows("snapshot-code-available", {
+            hasCode: false,
+            code: ""
+          });
+        }
+      } catch (extractErr) {
+        logger.warn("Failed to extract code blocks from snapshot response", { error: extractErr.message });
+      }
     } catch (error) {
       logger.error("Screenshot OCR process failed", {
         error: error.message,

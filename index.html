@@ -51,6 +51,7 @@
       }
 
       .command-item {
+        position: relative;
         display: inline-flex;
         align-items: center;
         gap: 6px;
@@ -195,6 +196,8 @@
           box-shadow: 0 0 16px rgba(245, 158, 11, 0.8);
         }
       }
+
+
 
       /* Small round info button */
       #infoButton {
@@ -1137,21 +1140,21 @@
   </head>
   <body>
     <div class="command-tab is-minimal">
-      <!-- Prefix tools: Snapshot & MCQ (Hidden in minimal mode, shown in expanded mode) -->
+      <div class="command-item" id="screenshotButton" title="Take Snapshot (⌘⇧S) — Click or hover 1s">
+        <i class="fas fa-camera"></i>
+        <span>⌘⇧S</span>
+      </div>
+      <div class="command-separator"></div>
+      <!-- Prefix tools: MCQ (Hidden in minimal mode, shown in expanded mode) -->
       <div class="extended-prefix-group" id="extendedPrefixGroup">
-        <div class="command-item" id="screenshotButton">
-          <i class="fas fa-camera"></i>
-          <span>⌘⇧S</span>
-        </div>
-        <div class="command-separator"></div>
-        <div class="command-item" id="mcqToggle">
+        <div class="command-item" id="mcqToggle" title="Toggle MCQ Mode">
           <i class="fas fa-list-check"></i>
           <span>MCQ</span>
         </div>
         <div class="command-separator"></div>
       </div>
       <!-- Rubic Universal MCQ Button -->
-      <div class="command-item" id="rubicButton" style="position: relative;">
+      <div class="command-item" id="rubicButton" style="position: relative;" title="Rubic Universal MCQ — Click or hover 1s">
         <div class="ai-status-dot disconnected" id="aiStatusDot"></div>
         <i class="fas fa-cube"></i>
         <span id="rubicButtonLabel">Rubic</span>
