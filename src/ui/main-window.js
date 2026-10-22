@@ -452,6 +452,9 @@ class MainWindowUI {
         this.infoButton = document.getElementById('infoButton');
         this.shortcutsPopover = document.getElementById('shortcutsPopover');
         this.screenshotButton = document.getElementById('screenshotButton');
+        this.snapshotCopyBtn = document.getElementById('snapshotCopyBtn');
+        this.snapshotCopyIcon = document.getElementById('snapshotCopyIcon');
+        this.snapshotExtractedCode = '';
         this.mcqToggle = document.getElementById('mcqToggle');
         this.autoHideToggle = document.getElementById('autoHideToggle');
         this.autoTypeButton = document.getElementById('autoTypeButton');
@@ -566,6 +569,38 @@ class MainWindowUI {
             this.screenshotButton.addEventListener('click', triggerScreenshotAction);
             if (window.RubicHoverDwell) {
                 window.RubicHoverDwell.attach(this.screenshotButton, triggerScreenshotAction, { dwellMs: 1000 });
+            }
+        }
+
+        // 1b. Snapshot code copy button (Click OR 1s forward hover dwell to copy)
+        const triggerCopySnapshotCode = async () => {
+            if (!this.snapshotExtractedCode) return;
+            let ok = false;
+            try {
+                if (window.electronAPI && typeof window.electronAPI.copyToClipboard === 'function') {
+                    ok = await window.electronAPI.copyToClipboard(this.snapshotExtractedCode);
+                }
+                if (!ok && navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(this.snapshotExtractedCode);
+                    ok = true;
+                }
+            } catch (err) {
+                logger.warn('Failed to copy snapshot code to clipboard', err);
+            }
+            if (ok && this.snapshotCopyIcon) {
+                this.snapshotCopyIcon.className = 'fas fa-check';
+                setTimeout(() => {
+                    if (this.snapshotCopyIcon) {
+                        this.snapshotCopyIcon.className = 'fas fa-copy';
+                    }
+                }, 1500);
+            }
+        };
+
+        if (this.snapshotCopyBtn) {
+            this.snapshotCopyBtn.addEventListener('click', triggerCopySnapshotCode);
+            if (window.RubicHoverDwell) {
+                window.RubicHoverDwell.attach(this.snapshotCopyBtn, triggerCopySnapshotCode, { dwellMs: 1000 });
             }
         }
 
@@ -1241,6 +1276,30 @@ class MainWindowUI {
                 this.updateAutoTypeState();
                 logger.info('Auto-type stopped in UI', data);
             });
+
+            // Listen for snapshot code availability to show/hide copy button
+            const handleSnapshotCode = (event, data) => {
+                const info = (data !== undefined && data !== null && typeof data === 'object') ? data : event;
+                if (info && info.hasCode && info.code) {
+                    this.snapshotExtractedCode = info.code;
+                    if (this.snapshotCopyBtn) {
+                        this.snapshotCopyBtn.style.display = 'inline-flex';
+                        this.resizeWindowToContent();
+                    }
+                } else {
+                    this.snapshotExtractedCode = '';
+                    if (this.snapshotCopyBtn) {
+                        this.snapshotCopyBtn.style.display = 'none';
+                        this.resizeWindowToContent();
+                    }
+                }
+            };
+            if (window.electronAPI && window.electronAPI.onSnapshotCodeAvailable) {
+                window.electronAPI.onSnapshotCodeAvailable(handleSnapshotCode);
+            }
+            if (window.electronAPI && window.electronAPI.receive) {
+                window.electronAPI.receive('snapshot-code-available', handleSnapshotCode);
+            }
 
 
             

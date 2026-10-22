@@ -667,6 +667,17 @@ class ApplicationController {
       }
     });
 
+    ipcMain.on("report-code-available", (event, data) => {
+      const code = (data && data.code) ? data.code : (typeof data === 'string' ? data : '');
+      if (code && code.trim()) {
+        autoTypeService.setLastCode(code.trim());
+        windowManager.broadcastToAllWindows("snapshot-code-available", {
+          hasCode: true,
+          code: code.trim()
+        });
+      }
+    });
+
     ipcMain.handle("get-clipboard-history", () => {
       return clipboardTrackerManager.getHistory();
     });
