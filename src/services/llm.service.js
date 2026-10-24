@@ -1647,7 +1647,7 @@ Follow with a crisp 2-3 bullet point justification.`;
   _streamRequestForModel(geminiRequest, modelName, apiKey, onDelta, abortSignal = null) {
     const https = require('https');
     const timeout = Math.max(16000, config.get('llm.gemini.timeout') || 16000);
-    const ttftTimeout = 12000; // Watchdog: allow up to 12s for initial stream chunk on high load
+    const ttftTimeout = 5000; // Fast watchdog: allow up to 5s for initial stream chunk, then fast-failover
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${apiKey}`;
     // Strip thinkingConfig from generationConfig — the v1beta REST endpoint does NOT support it
     // and returns an empty response (no text, no tool calls) when it is present, causing the

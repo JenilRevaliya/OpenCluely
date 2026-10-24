@@ -180,6 +180,7 @@ class ApplicationController {
     this._frontAppTracker = null;
     this._activeLlmAbortController = null;
     this._currentLlmRequestId = 0;
+    this._hasActiveAnswer = false;
 
     // First-run onboarding: detects missing .env / API key and triggers
     // a settings-window prompt on first launch so users don't have to
@@ -957,6 +958,7 @@ class ApplicationController {
 
     ipcMain.handle("clear-session-memory", () => {
       sessionManager.clear();
+      this._hasActiveAnswer = false;
       windowManager.broadcastToAllWindows("session-cleared");
       return { success: true };
     });
@@ -1739,6 +1741,7 @@ class ApplicationController {
   clearSessionMemory() {
     try {
       sessionManager.clear();
+      this._hasActiveAnswer = false;
       windowManager.broadcastToAllWindows("session-cleared");
       logger.info("Session memory cleared via global shortcut");
     } catch (error) {
@@ -2117,6 +2120,108 @@ class ApplicationController {
   }
 
   /**
+   * Detect unimportant audio connectivity remarks, repetition requests, and conversational fillers.
+   * E.g. "sorry, didn't hear. Can you speak again", "can you hear me", "am I audible", "you're on mute".
+   * These must NEVER overwrite the previous response or code on the response window.
+   */
+  _isNonQuestionOrAudioFiller(text) {
+    if (!text || typeof text !== 'string') return false;
+    const clean = text.trim();
+    if (clean.length === 0) return false;
+
+    // Normalization: strip apostrophes first (didn't -> didnt), then replace punctuation with space
+    const lower = clean.toLowerCase()
+      .replace(/['’]/g, '')
+      .replace(/[.,!?;:"\-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!lower) return false;
+
+    // RULE 1: Never filter if technical, algorithmic, system design, or coding keywords are present
+    const technicalKeywords = [
+      'algorithm', 'complexity', 'runtime', 'big o', 'data structure', 'array', 'string',
+      'hashmap', 'hash map', 'hash table', 'map', 'set', 'tree', 'binary tree', 'bst', 'trie',
+      'heap', 'priority queue', 'graph', 'dfs', 'bfs', 'dijkstra', 'dynamic programming',
+      'recursion', 'backtrack', 'pointer', 'sliding window', 'binary search', 'stack', 'queue',
+      'linked list', 'sql', 'database', 'index', 'transaction', 'acid', 'nosql', 'redis',
+      'kafka', 'system design', 'load balancer', 'latency', 'throughput', 'api', 'rest',
+      'graphql', 'docker', 'kubernetes', 'concurrency', 'thread', 'async', 'promise',
+      'deadlock', 'mutex', 'python', 'javascript', 'typescript', 'java', 'golang', 'rust',
+      'c++', 'inheritance', 'polymorphism', 'solid', 'design pattern', 'singleton', 'factory',
+      'react', 'node', 'component', 'hook', 'redux', 'state', 'props', 'function', 'variable',
+      'test', 'leetcode', 'palindrome', 'anagram', 'fibonacci', 'sort', 'quicksort', 'mergesort',
+      'architecture', 'cache', 'caching', 'microservice', 'distributed', 'scale', 'scaling',
+      'explain', 'difference between', 'how does', 'why do we', 'implement', 'write a function',
+      'background', 'project', 'experience', 'worked on', 'tell me about'
+    ];
+
+    for (const kw of technicalKeywords) {
+      if (lower.includes(kw)) {
+        return false;
+      }
+    }
+
+    // RULE 2: Standard Audio Quality / Connection / Hearing repetition phrases
+    const audioFillerPatterns = [
+      // Hearing issues / didn't hear / didn't catch / couldn't hear
+      /\b(sorry\s+)?(i\s+)?(didnt|couldnt|did\s+not|could\s+not)\s+(hear|catch|get|understand)\b/,
+      /\b(sorry\s+)?didnt\s+hear\b/,
+      /\b(sorry\s+)?didnt\s+catch\b/,
+      /\bcouldnt\s+hear\b/,
+      
+      // Repetition requests: speak again / say that again / repeat
+      /\b(can|could|would)\s+(you\s+)?(please\s+)?(repeat|reiterate|speak\s+again|say\s+that\s+again|say\s+again|speak\s+louder|speak\s+up)\b/,
+      /\b(please\s+)?(repeat|speak\s+again|say\s+that\s+again|say\s+again|speak\s+louder|speak\s+up)\b/,
+      /\brepeat\s+(that|please|the\s+question)\b/,
+      
+      // Audibility / Mic checks
+      /\b(can|could)\s+you\s+hear\s+me(\s+now)?\b/,
+      /\b(am\s+i|can\s+you\s+hear)\s+(audible|clear)\b/,
+      /\bam\s+i\s+audible\b/,
+      /\b(you\s+are|youre)\s+(on\s+mute|muted|inaudible|breaking\s+up|cutting\s+out|lagging|frozen)\b/,
+      /\b(voice|audio|sound|mic|microphone|connection)\s+(is\s+)?(breaking|cutting|lagging|bad|low|distorted|lost|glitching)\b/,
+      /\b(cant|cannot)\s+hear\s+you\b/,
+      /\byou\s+(cut\s+out|froze|dropped)\b/,
+      /\bi\s+lost\s+you\b/,
+      
+      // Polite repetition prompts without technical substance
+      /\b(pardon(\s+me)?|excuse\s+me|come\s+again)\b/,
+      /\bwhat\s+did\s+you\s+say\b/,
+      
+      // Conversational pauses and small talk interruptions
+      /\b(hold\s+on|wait\s+a\s+(sec|second|moment|min|minute)|give\s+me\s+a\s+(sec|second|moment|min)|just\s+a\s+(sec|second|moment)|one\s+second|one\s+sec)\b/,
+      /\b(sorry\s+)?(go\s+ahead|you\s+go\s+first|please\s+go\s+ahead|after\s+you)\b/,
+      /\b(never\s+mind|no\s+worries|its\s+okay|all\s+good|dont\s+worry)\b/,
+      /\b(let\s+me\s+see|lets\s+see|let\s+me\s+check)\b/
+    ];
+
+    for (const pattern of audioFillerPatterns) {
+      if (pattern.test(lower)) {
+        return true;
+      }
+    }
+
+    // RULE 3: Very short conversational non-questions (≤ 4 words) that don't have question words
+    const words = lower.split(' ').filter(Boolean);
+    if (words.length <= 4) {
+      const nonQuestionPrefixes = [
+        'sorry', 'yes', 'no', 'yeah', 'yep', 'nope', 'okay', 'ok', 'sure', 'alright',
+        'hello', 'hi', 'hey', 'good', 'fine', 'thank', 'thanks'
+      ];
+      const startsWithConversational = nonQuestionPrefixes.includes(words[0]);
+      const hasQuestionWord = /\b(what|how|why|when|where|who|which|explain|compare|define|implement)\b/.test(lower);
+      const hasQuestionMark = clean.endsWith('?');
+
+      if (startsWithConversational && !hasQuestionWord && !hasQuestionMark) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
    * Extract the actual actionable question from a composite recruiter statement.
    * E.g. "Great, thanks for explaining that. Moving forward, how do you handle deadlocks?"
    * -> "how do you handle deadlocks?"
@@ -2316,6 +2421,13 @@ class ApplicationController {
       return;
     }
 
+    // Suppress dispatch if the utterance is an unimportant audio connection remark or repetition filler
+    if (this._isNonQuestionOrAudioFiller(combined)) {
+      logger.info("Suppressing dispatch for audio connection/repetition filler to preserve active answer", { text: combined });
+      this._utteranceBuffer = "";
+      return;
+    }
+
     // Require substantive content (> 2 chars and at least two letters)
     if (combined.length < 3 || !/[a-zA-Z]{2,}/.test(combined)) {
       return;
@@ -2323,6 +2435,11 @@ class ApplicationController {
 
     // Extract core question from recruiter compound statement
     const targetQuestion = this._extractCoreQuestion(combined) || combined;
+    if (this._isNonQuestionOrAudioFiller(targetQuestion)) {
+      logger.info("Suppressing dispatch for core audio filler question to preserve active answer", { text: targetQuestion });
+      this._utteranceBuffer = "";
+      return;
+    }
     this._utteranceBuffer = "";
 
     // 1. LATEST-WINS PREEMPTION:
@@ -2397,7 +2514,7 @@ class ApplicationController {
     }
   }
 
-  async processTranscriptionWithLLM(text, sessionHistory, abortSignal = null, requestId = 0, messageId = null) {
+  async processTranscriptionWithLLM(text, sessionHistory, abortSignal = null, requestId = 0, messageId = null, attempt = 1, maxAttempts = 3) {
     if (abortSignal && abortSignal.aborted) {
       return;
     }
@@ -2433,6 +2550,8 @@ class ApplicationController {
         skill: this.activeSkill,
         requestId,
         messageId,
+        attempt,
+        maxAttempts,
         textLength: cleanText.length,
         textPreview: cleanText.substring(0, 100) + "..."
       });
@@ -2454,6 +2573,7 @@ class ApplicationController {
         };
 
         sessionManager.addModelResponse(greetingResponse, fastResult.metadata);
+        this._hasActiveAnswer = true;
         this.sendTranscriptionLLMResponseToVoiceTargets(fastResult);
         return;
       }
@@ -2488,12 +2608,22 @@ class ApplicationController {
         };
 
         sessionManager.addModelResponse(instant.fullResponse, instantResult.metadata);
+        this._hasActiveAnswer = true;
         this.sendTranscriptionLLMResponseToVoiceTargets(instantResult);
         return;
       }
 
       // Path B: Incomplete Speech, Mumbles, or Trailing Sentence Fragments
       if (this._isIncompleteOrMumble(cleanText)) {
+        if (this._hasActiveAnswer) {
+          logger.info("Incomplete or trailing speech detected, but active answer already displayed; preserving current answer without overwriting", {
+            requestId,
+            text: cleanText
+          });
+          this.sendToVoiceResponseWindows('restore-active-answer', {});
+          return;
+        }
+
         logger.info("Incomplete or trailing speech detected; showing clarification signal card instead of forcing answer", {
           requestId,
           text: cleanText
@@ -2507,47 +2637,136 @@ class ApplicationController {
         return;
       }
 
-      const llmResult = await llmService.processTranscriptionWithIntelligentResponseStream(
-        cleanText,
-        this.activeSkill,
-        (sessionHistory && sessionHistory.recent) || [],
-        needsProgrammingLanguage ? this.codingLanguage : null,
-        (delta) => {
-          if (abortSignal && abortSignal.aborted) return;
-          this.sendToVoiceResponseWindows("transcription-llm-response-chunk", {
-            messageId,
-            delta
-          });
-        },
-        abortSignal
-      );
+      let hasReceivedChunk = false;
+      let analyzeTimeout = null;
+      const internalAbort = new AbortController();
 
-      if (abortSignal && abortSignal.aborted) {
-        logger.info("Dropping finished LLM result because request was aborted for newer question", { requestId });
-        return;
+      const combinedAbort = (reason) => {
+        try { internalAbort.abort(reason); } catch (_) {}
+      };
+
+      if (abortSignal) {
+        if (abortSignal.aborted) return;
+        abortSignal.addEventListener('abort', () => combinedAbort(abortSignal.reason || 'Preempted'), { once: true });
       }
 
-      llmResult.metadata = { ...llmResult.metadata, messageId };
+      // 5-second watchdog for "Analyzing..." phase:
+      // If no chunks are received within 5 seconds, restart generation immediately with the same question!
+      const WATCHDOG_MS = 5000;
+      analyzeTimeout = setTimeout(() => {
+        if (!hasReceivedChunk && !internalAbort.signal.aborted) {
+          logger.warn(`Watchdog: question stuck on analyzing for >${WATCHDOG_MS}ms, restarting generation...`, {
+            requestId,
+            attempt,
+            textPreview: cleanText.substring(0, 50)
+          });
+          combinedAbort('ANALYZE_TIMEOUT');
+        }
+      }, WATCHDOG_MS);
 
-      // Add LLM response to session memory
-      sessionManager.addModelResponse(llmResult.response, {
-        skill: this.activeSkill,
-        processingTime: llmResult.metadata.processingTime,
-        usedFallback: llmResult.metadata.usedFallback,
-        isTranscriptionResponse: true
-      });
+      try {
+        const llmResult = await llmService.processTranscriptionWithIntelligentResponseStream(
+          cleanText,
+          this.activeSkill,
+          (sessionHistory && sessionHistory.recent) || [],
+          needsProgrammingLanguage ? this.codingLanguage : null,
+          (delta) => {
+            if (internalAbort.signal.aborted || (abortSignal && abortSignal.aborted)) return;
+            hasReceivedChunk = true;
+            if (analyzeTimeout) {
+              clearTimeout(analyzeTimeout);
+              analyzeTimeout = null;
+            }
+            this.sendToVoiceResponseWindows("transcription-llm-response-chunk", {
+              messageId,
+              delta
+            });
+          },
+          internalAbort.signal
+        );
 
-      // Render the final answer cleanly ONCE
-      this.sendTranscriptionLLMResponseToVoiceTargets(llmResult);
+        if (analyzeTimeout) {
+          clearTimeout(analyzeTimeout);
+          analyzeTimeout = null;
+        }
 
-      logger.info("Transcription LLM response completed", {
-        requestId,
-        messageId,
-        responseLength: llmResult.response.length,
-        skill: this.activeSkill,
-        programmingLanguage: needsProgrammingLanguage ? this.codingLanguage : 'not applicable',
-        processingTime: llmResult.metadata.processingTime
-      });
+        if (abortSignal && abortSignal.aborted) {
+          logger.info("Dropping finished LLM result because request was aborted for newer question", { requestId });
+          return;
+        }
+
+        llmResult.metadata = { ...llmResult.metadata, messageId };
+
+        // Add LLM response to session memory
+        sessionManager.addModelResponse(llmResult.response, {
+          skill: this.activeSkill,
+          processingTime: llmResult.metadata.processingTime,
+          usedFallback: llmResult.metadata.usedFallback,
+          isTranscriptionResponse: true
+        });
+
+        // Mark that an active answer is now displayed
+        this._hasActiveAnswer = true;
+
+        // Render the final answer cleanly ONCE
+        this.sendTranscriptionLLMResponseToVoiceTargets(llmResult);
+
+        logger.info("Transcription LLM response completed", {
+          requestId,
+          messageId,
+          attempt,
+          responseLength: llmResult.response.length,
+          skill: this.activeSkill,
+          programmingLanguage: needsProgrammingLanguage ? this.codingLanguage : 'not applicable',
+          processingTime: llmResult.metadata.processingTime
+        });
+
+      } catch (streamError) {
+        if (analyzeTimeout) {
+          clearTimeout(analyzeTimeout);
+          analyzeTimeout = null;
+        }
+
+        // If user preempted or newer question arrived, do not retry
+        if (abortSignal && (abortSignal.aborted || streamError.message === 'ABORTED' || streamError.name === 'AbortError')) {
+          if (streamError.message !== 'ANALYZE_TIMEOUT' && internalAbort.signal.reason !== 'ANALYZE_TIMEOUT') {
+            logger.debug("Suppressed error/retry for aborted transcription LLM request", { requestId });
+            return;
+          }
+        }
+
+        // Auto-retry with same question if timed out or failed and attempts remain
+        if (attempt < maxAttempts && (!abortSignal || !abortSignal.aborted)) {
+          logger.warn(`Stuck on analyzing or stream error (attempt ${attempt}/${maxAttempts}). Instantly restarting with same question...`, {
+            requestId,
+            attempt,
+            reason: streamError.message,
+            text: cleanText.substring(0, 60)
+          });
+
+          // Notify voice windows that we are restarting/retrying
+          this.sendToVoiceResponseWindows("transcription-llm-retry", {
+            messageId,
+            attempt: attempt + 1,
+            maxAttempts,
+            questionPreview: cleanText.substring(0, 80)
+          });
+
+          // Instantly restart with the same question
+          return this.processTranscriptionWithLLM(
+            text,
+            sessionHistory,
+            abortSignal,
+            requestId,
+            messageId,
+            attempt + 1,
+            maxAttempts
+          );
+        }
+
+        // If all retries exhausted, throw to outer catch for fallback delivery
+        throw streamError;
+      }
 
     } catch (error) {
       if (abortSignal && (abortSignal.aborted || error.message === 'ABORTED' || error.name === 'AbortError')) {
@@ -2555,7 +2774,7 @@ class ApplicationController {
         return;
       }
 
-      logger.error("Transcription LLM processing failed", {
+      logger.error("Transcription LLM processing failed after retries", {
         requestId,
         error: error.message,
         errorStack: error.stack,
@@ -2563,7 +2782,7 @@ class ApplicationController {
         text: text ? text.substring(0, 100) : 'undefined'
       });
 
-      // Try to provide a fallback response
+      // Try to provide a fallback response and deliver it to windows
       try {
         const fallbackResult = llmService.generateIntelligentFallbackResponse(text, this.activeSkill);
         if (messageId) {
@@ -2577,6 +2796,10 @@ class ApplicationController {
           isTranscriptionResponse: true,
           fallbackReason: error.message
         });
+
+        // CRITICAL FIX: Deliver the fallback response to voice windows so the UI exits "Analyzing..."!
+        this._hasActiveAnswer = true;
+        this.sendTranscriptionLLMResponseToVoiceTargets(fallbackResult);
 
       } catch (fallbackError) {
         logger.error("Fallback response also failed", {
@@ -2679,6 +2902,7 @@ class ApplicationController {
   }
 
   sendTranscriptionLLMResponseToVoiceTargets(llmResult) {
+    this._hasActiveAnswer = true;
     const messageId = (llmResult.metadata && llmResult.metadata.messageId) || null;
     const data = {
       response: llmResult.response,

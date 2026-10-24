@@ -84,6 +84,31 @@
             letter-spacing: 0.5px;
         }
 
+        .history-badge {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-weight: 600;
+            padding: 1px 5px;
+            border-radius: 3px;
+            letter-spacing: 0.3px;
+            margin-left: 4px;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .history-nav-btn {
+            font-size: 14px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .history-badge.hidden,
+        .history-nav-btn.hidden {
+            display: none !important;
+        }
+
         .window-controls {
             display: flex;
             align-items: center;
@@ -492,8 +517,11 @@
             <div class="window-title">
                 <span>AI Response</span>
                 <span class="title-badge" id="skillBadge">AI</span>
+                <span class="history-badge hidden" id="historyBadge">1/1</span>
             </div>
             <div class="window-controls">
+                <button id="history-prev-btn" class="window-btn history-nav-btn hidden" title="Previous Answer (Alt+Left)">‹</button>
+                <button id="history-next-btn" class="window-btn history-nav-btn hidden" title="Next Answer (Alt+Right)">›</button>
                 <button id="close-window-btn" class="window-btn window-btn-close" title="Close (Cmd+Shift+V / Esc)">×</button>
             </div>
         </div>
@@ -543,6 +571,9 @@
         let streamTimer = null;
         let scrollableElements = [];
         let initialized = false;
+        let answerHistory = [];
+        let currentHistoryIndex = -1;
+        let loadingWatchdogTimer = null;
 
         document.addEventListener('DOMContentLoaded', initLLMResponseWindow);
         if (document.readyState === 'complete' || document.readyState === 'interactive') {
@@ -574,6 +605,22 @@
                 });
             }
 
+            // History navigation buttons
+            const prevBtn = document.getElementById('history-prev-btn');
+            if (prevBtn) {
+                prevBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    navigateHistory(-1);
+                });
+            }
+            const nextBtn = document.getElementById('history-next-btn');
+            if (nextBtn) {
+                nextBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    navigateHistory(1);
+                });
+            }
+
             // 4-Corner Hover-Dwell Drag & Drop
             if (window.initCornerHoverDrag) {
                 window.initCornerHoverDrag('llmResponse');
@@ -593,6 +640,9 @@
             if (api.onSessionCleared) {
                 api.onSessionCleared(() => {
                     hideLoadingState();
+                    answerHistory = [];
+                    currentHistoryIndex = -1;
+                    updateHistoryUI();
                     const resp = document.getElementById('response-content');
                     if (resp) resp.classList.add('hidden');
                 });
@@ -600,7 +650,34 @@
 
             // Loading state
             if (api.onShowLoading) {
-                api.onShowLoading(() => showLoadingState());
+                api.onShowLoading(() => showLoadingState('Analyzing'));
+            }
+
+            // Retry state (updates loading indicator immediately)
+            if (api.onTranscriptionLlmRetry) {
+                api.onTranscriptionLlmRetry((_e, data) => {
+                    const attempt = data && data.attempt ? data.attempt : 2;
+                    const maxAttempts = data && data.maxAttempts ? data.maxAttempts : 3;
+                    showLoadingState(`Retrying (${attempt}/${maxAttempts})`);
+                });
+            }
+
+            // Answer backtrack / history navigation via global IPC (Alt+Left / Alt+Right)
+            if (api.onBacktrackAnswer) {
+                api.onBacktrackAnswer((_e, data) => {
+                    const delta = (data && typeof data.delta === 'number') ? data.delta : -1;
+                    navigateHistory(delta);
+                });
+            }
+
+            // Restore active answer (e.g. trailing mumbles or audio filler canceled)
+            if (api.onRestoreActiveAnswer) {
+                api.onRestoreActiveAnswer(() => {
+                    hideLoadingState();
+                    if (answerHistory.length > 0 && currentHistoryIndex >= 0) {
+                        displayResponse(answerHistory[currentHistoryIndex]);
+                    }
+                });
             }
 
             // Streaming start
@@ -610,7 +687,7 @@
                     updateSkillBadge(skill);
                     streamAccumulator = '';
                     isStreaming = true;
-                    showLoadingState();
+                    showLoadingState('Analyzing');
                 });
             }
 
@@ -640,18 +717,22 @@
                     clearTimeout(streamTimer);
                     streamTimer = null;
                 }
+                if (loadingWatchdogTimer) {
+                    clearTimeout(loadingWatchdogTimer);
+                    loadingWatchdogTimer = null;
+                }
                 isStreaming = false;
                 const text = (data && (data.content || data.response)) || (typeof data === 'string' ? data : '');
                 if (!text || !text.trim()) {
                     if (streamAccumulator.trim()) {
                         hideLoadingState();
-                        displayResponse({ content: streamAccumulator, metadata: data && data.metadata });
+                        saveAndDisplayAnswer({ content: streamAccumulator, metadata: data && data.metadata });
                     }
                     return;
                 }
                 streamAccumulator = '';
                 hideLoadingState();
-                displayResponse(data);
+                saveAndDisplayAnswer(data);
                 setupScrolling();
             }
 
@@ -670,6 +751,62 @@
             }
         }
 
+        function saveAndDisplayAnswer(data) {
+            const text = (data && (data.content || data.response)) || (typeof data === 'string' ? data : '');
+            if (!text || !text.trim()) return;
+
+            // Avoid pushing duplicate consecutive answers
+            const lastItem = answerHistory[answerHistory.length - 1];
+            const isDuplicate = lastItem && ((lastItem.content || lastItem.response) === text);
+            if (!isDuplicate) {
+                answerHistory.push(data);
+                currentHistoryIndex = answerHistory.length - 1;
+            }
+            updateHistoryUI();
+            displayResponse(data);
+        }
+
+        function updateHistoryUI() {
+            const badge = document.getElementById('historyBadge');
+            const prevBtn = document.getElementById('history-prev-btn');
+            const nextBtn = document.getElementById('history-next-btn');
+
+            if (answerHistory.length > 1) {
+                if (badge) {
+                    badge.textContent = `${currentHistoryIndex + 1}/${answerHistory.length}`;
+                    badge.classList.remove('hidden');
+                }
+                if (prevBtn) {
+                    prevBtn.classList.remove('hidden');
+                    prevBtn.disabled = currentHistoryIndex <= 0;
+                    prevBtn.style.opacity = currentHistoryIndex <= 0 ? '0.35' : '1';
+                    prevBtn.style.pointerEvents = currentHistoryIndex <= 0 ? 'none' : 'auto';
+                }
+                if (nextBtn) {
+                    nextBtn.classList.remove('hidden');
+                    nextBtn.disabled = currentHistoryIndex >= answerHistory.length - 1;
+                    nextBtn.style.opacity = currentHistoryIndex >= answerHistory.length - 1 ? '0.35' : '1';
+                    nextBtn.style.pointerEvents = currentHistoryIndex >= answerHistory.length - 1 ? 'none' : 'auto';
+                }
+            } else {
+                if (badge) badge.classList.add('hidden');
+                if (prevBtn) prevBtn.classList.add('hidden');
+                if (nextBtn) nextBtn.classList.add('hidden');
+            }
+        }
+
+        function navigateHistory(delta) {
+            if (answerHistory.length <= 1) return;
+            const newIndex = currentHistoryIndex + delta;
+            if (newIndex >= 0 && newIndex < answerHistory.length) {
+                currentHistoryIndex = newIndex;
+                updateHistoryUI();
+                hideLoadingState();
+                displayResponse(answerHistory[currentHistoryIndex]);
+                setupScrolling();
+            }
+        }
+
         function updateSkillBadge(skill) {
             const badge = document.getElementById('skillBadge');
             if (!badge) return;
@@ -680,16 +817,37 @@
             }
         }
 
-        function showLoadingState() {
+        function showLoadingState(statusText = 'Analyzing') {
             const loadingElement = document.getElementById('loading');
             const responseElement = document.getElementById('response-content');
+            const loadingTextEl = loadingElement ? loadingElement.querySelector('.loading-text') : null;
+            if (loadingTextEl) {
+                loadingTextEl.textContent = statusText;
+            }
             if (loadingElement) loadingElement.classList.remove('hidden');
             if (responseElement) responseElement.classList.add('hidden');
+
+            // Safety watchdog: if stuck on loading for > 7s with no chunks/responses,
+            // and an answer is available in history, automatically unhide and restore it
+            if (loadingWatchdogTimer) clearTimeout(loadingWatchdogTimer);
+            loadingWatchdogTimer = setTimeout(() => {
+                if (answerHistory.length > 0 && currentHistoryIndex >= 0) {
+                    console.warn('[LLM-RESPONSE] Loading safety watchdog fired; restoring previous answer');
+                    hideLoadingState();
+                    displayResponse(answerHistory[currentHistoryIndex]);
+                }
+            }, 7000);
         }
 
         function hideLoadingState() {
+            if (loadingWatchdogTimer) {
+                clearTimeout(loadingWatchdogTimer);
+                loadingWatchdogTimer = null;
+            }
             const loadingElement = document.getElementById('loading');
             if (loadingElement) loadingElement.classList.add('hidden');
+            const responseElement = document.getElementById('response-content');
+            if (responseElement) responseElement.classList.remove('hidden');
         }
 
         function escapeHtml(text) {
@@ -942,6 +1100,18 @@
                 if (window.electronAPI && window.electronAPI.closeWindow) {
                     window.electronAPI.closeWindow();
                 }
+                return;
+            }
+
+            if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'Left')) {
+                e.preventDefault();
+                navigateHistory(-1);
+                return;
+            }
+
+            if (e.altKey && (e.key === 'ArrowRight' || e.key === 'Right')) {
+                e.preventDefault();
+                navigateHistory(1);
                 return;
             }
 
