@@ -433,9 +433,10 @@ class LLMService extends EventEmitter {
     this.requestCount++;
 
     try {
-      // Build system instruction using the skill prompt (with optional language and MCQ injection)
+      // Build system instruction using the skill prompt (for snapshot/image analysis, default to dsa skill if interview or unspecified)
+      const effectiveSkill = (activeSkill === 'interview' || !activeSkill) ? 'dsa' : activeSkill;
       const { promptLoader } = require('../../prompt-loader');
-      let skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage, this.isMcqMode) || '';
+      let skillPrompt = promptLoader.getSkillPrompt(effectiveSkill, programmingLanguage, this.isMcqMode) || '';
 
       // Build request with text + image parts
       const base64 = imageBuffer.toString('base64');
@@ -600,8 +601,10 @@ class LLMService extends EventEmitter {
     this.requestCount++;
 
     try {
+      // For snapshot/image analysis, default to dsa skill if interview or unspecified
+      const effectiveSkill = (activeSkill === 'interview' || !activeSkill) ? 'dsa' : activeSkill;
       const { promptLoader } = require('../../prompt-loader');
-      let skillPrompt = promptLoader.getSkillPrompt(activeSkill, programmingLanguage, this.isMcqMode) || '';
+      let skillPrompt = promptLoader.getSkillPrompt(effectiveSkill, programmingLanguage, this.isMcqMode) || '';
       const base64 = imageBuffer.toString('base64');
 
       const geminiRequest = {

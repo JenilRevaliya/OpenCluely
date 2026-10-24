@@ -1862,19 +1862,20 @@ class ApplicationController {
       // Use image directly with LLM and active skill; do not send chat messages here
       const sessionHistory = sessionManager.getOptimizedHistory();
 
+      const imageSkill = (this.activeSkill === 'interview' || !this.activeSkill) ? 'dsa' : this.activeSkill;
       const codingLanguage = this.codingLanguage || 'cpp';
 
       this._responseSeq = (this._responseSeq || 0) + 1;
       const messageId = `img-${Date.now()}-${this._responseSeq}`;
       windowManager.broadcastToAllWindows("transcription-llm-response-start", {
         messageId,
-        skill: this.activeSkill
+        skill: imageSkill
       });
 
       const llmResult = await llmService.processImageWithSkillStream(
         capture.imageBuffer,
         capture.mimeType || 'image/png',
-        this.activeSkill,
+        imageSkill,
         sessionHistory.recent,
         codingLanguage,
         (delta) => {
@@ -1887,7 +1888,7 @@ class ApplicationController {
       llmResult.metadata = { ...llmResult.metadata, messageId };
 
       sessionManager.addModelResponse(llmResult.response, {
-        skill: this.activeSkill,
+        skill: imageSkill,
         processingTime: llmResult.metadata.processingTime,
         usedFallback: llmResult.metadata.usedFallback,
         isImageAnalysis: true
@@ -1896,7 +1897,7 @@ class ApplicationController {
       this.broadcastTranscriptionLLMResponse(llmResult);
 
       windowManager.showLLMResponse(llmResult.response, {
-        skill: this.activeSkill,
+        skill: imageSkill,
         processingTime: llmResult.metadata.processingTime,
         usedFallback: llmResult.metadata.usedFallback,
         isImageAnalysis: true

@@ -6,8 +6,8 @@ class PromptLoader {
     this.prompts = new Map();
     this.promptsLoaded = false;
     this.skillPromptSent = new Set();
-    // Focus only on DSA
-    this.skillsRequiringProgrammingLanguage = ['dsa'];
+    // Focus on DSA and programming/interview skills
+    this.skillsRequiringProgrammingLanguage = ['dsa', 'interview'];
   }
 
   /**
@@ -118,6 +118,7 @@ STRICT MCQ RULES:
     
     switch (skillName) {
       case 'dsa':
+      case 'interview':
         languageInjection = `\n\n## IMPLEMENTATION LANGUAGE: ${languageUpper}
 STRICT REQUIREMENTS:
 - Respond ONLY in ${languageTitle}. Do not include any snippets or alternatives in other languages.
