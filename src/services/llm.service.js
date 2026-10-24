@@ -664,13 +664,30 @@ class LLMService extends EventEmitter {
       const langNote = programmingLanguage ? ` Use only ${programmingLanguage.toUpperCase()} if code is required.` : '';
       return `MANDATORY MCQ MODE ACTIVE: Analyze this screen/image for ALL Multiple Choice Questions (MCQs) visible. There may be one or multiple questions. For EACH question found: identify all options (A, B, C, D, etc.), select the single BEST correct answer, and format your response as "**Q[N] Correct Option: [Letter] - [Option Text]**" followed by concise reasoning. If only one MCQ is visible, omit the Q[N] prefix. Answer every question you can see.${langNote}`;
     }
-    const lang = programmingLanguage ? programmingLanguage.toUpperCase() : 'PYTHON';
-    return `Analyze this screen for a ${activeSkill.toUpperCase()} problem.
-CRITICAL EXECUTION RULES:
-1. Detect the platform (HackerRank, LeetCode, Codeforces, etc.), exact problem title, constraints, and visible editor template.
-2. If on HackerRank or an Online Assessment with driver code: provide the COMPLETE, self-contained drop-in replacement file (with standard imports, exact function signature, and the robust if __name__ == '__main__': driver reading stdin and writing to OUTPUT_PATH / stdout) so that replacing the whole editor executes 100% of test cases correctly.
-3. If on LeetCode: provide class Solution with the exact method signature.
-4. Output clean, optimal, comment-free code strictly in ${lang}.`;
+    const lang = programmingLanguage ? programmingLanguage.toUpperCase() : 'CPP';
+    return `Analyze this screen for the coding/technical problem.
+CRITICAL CODE GENERATION RULES (STRICT COMPLIANCE REQUIRED):
+1. SIMPLEST & MOST BASIC APPROACH:
+   - Solve the problem in the most simple, basic, and direct way possible.
+   - Use straightforward, intuitive logic: standard loops (for/while), basic conditions, and standard collections (dict, set, list, vector, unordered_map).
+   - DO NOT OVER-ENGINEER: Avoid complex abstractions, convoluted nested lambdas, obscure one-liners, or unnecessary helper classes. Write clean, readable code that any engineer can immediately understand and trust.
+
+2. PASS 100% OF ALL TEST CASES (ZERO ERRORS):
+   - The solution MUST be 100% bug-free and pass ALL hidden test cases, edge cases, and performance limits.
+   - Explicitly handle edge cases: empty/null inputs, single element (N=1), negative numbers, zeros, all-duplicate values, and extreme boundary limits.
+   - In C++/Java: Always use 64-bit integers ('long long' / 'long') for sums, counts, and products to prevent integer overflow.
+   - Optimal Time Complexity: Ensure the algorithm fits the problem constraints (e.g. O(N) or O(N log N) for N <= 10^5) so it never causes Time Limit Exceeded (TLE).
+
+3. MINIMUM IMPORTS ONLY IF NEEDED:
+   - Include ONLY the absolute bare minimum imports strictly required for the code to compile and run.
+   - NEVER add unused imports. If built-in functions or types are sufficient, use ZERO imports.
+   - Do NOT include boilerplate laundry lists of imports (no unused math, os, sys, re, random, itertools, collections, heapq). Only import a package if a specific function from it is actually invoked in the solution.
+
+4. PLATFORM-AWARE FORMATTING:
+   - Detect the platform (HackerRank, LeetCode, Codeforces, etc.), exact problem title, constraints, and visible editor template.
+   - If on HackerRank or an Online Assessment with driver code: Provide the COMPLETE, self-contained drop-in replacement file with exact function signature and minimal runner reading stdin and writing to os.environ.get('OUTPUT_PATH') or stdout.
+   - If on LeetCode: Provide the exact 'class Solution' with the required method signature and ZERO unnecessary imports.
+   - Output clean, comment-free code strictly in ${lang}.`;
   }
 
   async processTextWithSkill(text, activeSkill, sessionMemory = [], programmingLanguage = null) {
@@ -1273,7 +1290,9 @@ Always respond directly to the point. Do not repeat the question or produce unne
 
 ### If the question is explicitly a coding problem, algorithmic challenge, or DSA statement:
 - State optimal time and space complexity.
-- Produce a clean, optimal, runnable implementation in the selected programming language in a properly tagged code block without comments.
+- Produce the SIMPLEST and MOST BASIC implementation in the selected programming language in a properly tagged code block without comments.
+- MINIMUM IMPORTS: Include only the absolute bare minimum imports strictly required for the code to run. Never include unused imports.
+- PASS 100% OF TEST CASES: Ensure the code explicitly handles edge cases (empty inputs, single elements, negative numbers, extreme constraints, and 64-bit integer overflow).
 
 ### If casual greeting:
 - Respond briefly and professionally: "Hello! I am ready to answer your technical and interview questions."`;

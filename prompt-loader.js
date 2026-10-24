@@ -122,8 +122,10 @@ STRICT MCQ RULES:
 STRICT REQUIREMENTS:
 - Respond ONLY in ${languageTitle}. Do not include any snippets or alternatives in other languages.
 - All code blocks must use triple backticks with the exact language tag: \`\`\`${fenceTag}\`\`\`.
-- Aim for the best possible time and space complexity; prefer optimal algorithms and data structures.
-- Provide: brief approach, then final ${languageTitle} implementation, followed by time/space complexity.
+- SIMPLEST & BASIC WAY: Implement the solution in the most simple, direct, and basic way possible while meeting the time complexity requirements. Avoid over-engineering, complex abstractions, or obscure syntax.
+- MINIMUM IMPORTS ONLY IF NEEDED: Include only the bare minimum imports strictly necessary for the code to compile and run. Never include unused imports.
+- PASS 100% OF TEST CASES: Ensure the code explicitly handles edge cases (empty inputs, single element, negative numbers, extreme boundary constraints, and 64-bit integer overflow) to guarantee passing 100% of test cases.
+- Provide: brief approach, then final comment-free ${languageTitle} implementation, followed by time/space complexity.
 - If the user's input is a problem statement (and does not include code), produce a complete, runnable ${languageTitle} solution without asking for clarification.
 - Avoid unnecessary verbosity; focus on correctness, clarity, and efficiency.`;
         break;

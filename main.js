@@ -1862,8 +1862,7 @@ class ApplicationController {
       // Use image directly with LLM and active skill; do not send chat messages here
       const sessionHistory = sessionManager.getOptimizedHistory();
 
-      const skillsRequiringProgrammingLanguage = ['dsa'];
-      const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
+      const codingLanguage = this.codingLanguage || 'cpp';
 
       this._responseSeq = (this._responseSeq || 0) + 1;
       const messageId = `img-${Date.now()}-${this._responseSeq}`;
@@ -1877,7 +1876,7 @@ class ApplicationController {
         capture.mimeType || 'image/png',
         this.activeSkill,
         sessionHistory.recent,
-        needsProgrammingLanguage ? this.codingLanguage : null,
+        codingLanguage,
         (delta) => {
           windowManager.broadcastToAllWindows("transcription-llm-response-chunk", {
             messageId,
